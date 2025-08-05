@@ -1,0 +1,28 @@
+# Common build output directory names
+build/
+.build/
+_build/
+build-output/
+cmake-out/
+
+# Backup files for Emacs
+*~
+
+# Ignore Visual Studio Code files
+.vsbuild/
+.vscode/
+
+# project files
+prj/
+Demos/*/Release/test-*
+Solutions/*/Release
+.qmake.stash
+UiSolutions/*/Release
+UiSolutions/*/*.user
+UiSolutions/*/Makefile
+
+logCfg
+
+#easyeai-api
+
+
