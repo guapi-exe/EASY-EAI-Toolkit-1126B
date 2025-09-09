@@ -21,11 +21,10 @@ add_definitions(-Wall -Wpointer-arith)
 
 # ======================== easyeai_api =========================
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../../easyeai-api)
-set(algorithm_root ${toolkit_root}/algorithm)
-set(common_root    ${toolkit_root}/common)
+set(netProtocol_root    ${toolkit_root}/netProtocol)
 
 
-include (${common_root}/modbus/api.cmake)
+include (${netProtocol_root}/modbus/api.cmake)
 ## api头文件路径
 set(api_inc 
 #    ${CMAKE_SYSROOT}/usr/include/rkfacial 

@@ -19,6 +19,7 @@ set(LOGMANAGER_INCLUDE_DIRS
 # c/c++ flags
 set(LOGMANAGER_LIBS 
     log_manager
+    ini
     pthread
     stdc++ 
     )

@@ -23,6 +23,28 @@ How to use：
 
 important update log:
 ---
+> 2025-09-09 :
+> * Release EASY-EAI-Toolkit-1126B-0.0.1
+> * update easyeai-api
+>     * common_api
+>         * [remove] gst_opt
+>         * [remove] http
+>         * [update] log_manager
+>         * [remove] modbus
+>         * [remove] rk_mpi
+>     * netProtocol_api
+>         * [new] http
+>         * [new] modbus
+>     * media_api
+>         * [new] gst_opt
+>         * [new] rk_mpi
+>         * [new] rga
+> * update Demo
+>     * [rename] netProtocol-http
+>     * [rename] netProtocol-modbus
+> * update Solution
+>     * [new] rtspMulitPlayer
+>
 > 2025-08-05 :
 > * Release EASY-EAI-Toolkit-1126B-0.0.0
 > * update easyeai-api

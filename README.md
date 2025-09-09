@@ -22,6 +22,28 @@
 
 重要更新：
 ---
+> 2025-09-09 :
+> * 发布 EASY-EAI-Toolkit-1126B-0.0.1
+> * 更新 easyeai-api
+>     * 通用组件api
+>         * [移出] gst_opt
+>         * [移出] http
+>         * [更新] log_manager
+>         * [移出] modbus
+>         * [移出] rk_mpi
+>     * 网络协议组件api
+>         * [新增] http
+>         * [新增] modbus
+>     * 多媒体组件api
+>         * [新增] gst_opt
+>         * [新增] rk_mpi
+>         * [新增] rga
+> * 新增【Api单例】
+>     * [重命名] netProtocol-http
+>     * [重命名] netProtocol-modbus
+> * 新增【开发实例】
+>     * [新增] rtspMulitPlayer
+>
 > 2025-08-05 :
 > * 发布 EASY-EAI-Toolkit-1126B-0.0.0
 > * 更新 easyeai-api
