@@ -100,9 +100,9 @@ void mainWidget::init()
     updateCPUSerial();
 
     mpTextLab = new QLabel;
-    mpTextLab->setStyleSheet("QLabel { font: 75 36pt 'Ubuntu'; color: rgb(162, 195, 56); background-color: transparent; }");
-    QFont font("Microsoft YaHei", 12, 87);
-    mpTextLab->setFont(font);
+    mpTextLab->setStyleSheet("QLabel { font: 75 16pt 'Ubuntu'; color: rgb(162, 195, 56); background-color: transparent; }");
+    //QFont font("Microsoft YaHei", 12, 87);
+    //mpTextLab->setFont(font);
     mpTextLab->setAlignment(Qt::AlignCenter);
     mpTextLab->setText(QString("欢迎使用easyeai_api"));
     layout->addWidget(mpTextLab);
