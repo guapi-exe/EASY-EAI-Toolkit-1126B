@@ -22,6 +22,35 @@
 
 重要更新：
 ---
+> 2025-09-16 :
+> * 发布 EASY-EAI-Toolkit-1126B-0.0.2
+> * 更新 easyeai-api
+>     * 算法组件api
+>         * [新增] car_detect
+>         * [新增] face_detect
+>         * [新增] face_recognition
+>         * [新增] fire_detect
+>         * [新增] helmet_detect
+>         * [新增] ocr
+>         * [新增] person_detect
+>         * [新增] person_pose
+>         * [新增] qrdecode
+>         * [新增] speech_recognition
+>     * 网络协议组件api
+>         * [新增] mqtt
+> * 新增【Api单例】
+>     * [新增] algorithm-car
+>     * [新增] algorithm-face_detect
+>     * [新增] algorithm-face_recognition
+>     * [新增] algorithm-fire
+>     * [新增] algorithm-helmet
+>     * [新增] algorithm-ocr
+>     * [新增] algorithm-person
+>     * [新增] algorithm-person_pose
+>     * [新增] algorithm-qrdecode
+>     * [新增] algorithm-speech_recognition
+>     * [新增] netProtocol-mqtt
+>
 > 2025-09-09 :
 > * 发布 EASY-EAI-Toolkit-1126B-0.0.1
 > * 更新 easyeai-api

@@ -23,6 +23,35 @@ How to use：
 
 important update log:
 ---
+> 2025-09-16 :
+> * Release EASY-EAI-Toolkit-1126B-0.0.2
+> * update easyeai-api
+>     * algorithm_api
+>         * [new] car_detect
+>         * [new] face_detect
+>         * [new] face_recognition
+>         * [new] fire_detect
+>         * [new] helmet_detect
+>         * [new] ocr
+>         * [new] person_detect
+>         * [new] person_pose
+>         * [new] qrdecode
+>         * [new] speech_recognition
+>     * netProtocol_api
+>         * [new] mqtt
+> * update Demo
+>     * [new] algorithm-car
+>     * [new] algorithm-face_detect
+>     * [new] algorithm-face_recognition
+>     * [new] algorithm-fire
+>     * [new] algorithm-helmet
+>     * [new] algorithm-ocr
+>     * [new] algorithm-person
+>     * [new] algorithm-person_pose
+>     * [new] algorithm-qrdecode
+>     * [new] algorithm-speech_recognition
+>     * [new] netProtocol-mqtt
+>
 > 2025-09-09 :
 > * Release EASY-EAI-Toolkit-1126B-0.0.1
 > * update easyeai-api

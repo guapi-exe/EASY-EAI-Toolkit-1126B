@@ -11,8 +11,7 @@ common_list=`ls -d common-*`
 #media_list=`ls -d media-*`
 netProtocol_list=`ls -d netProtocol-*`
 
-#alldemo="$algorithm_list $common_list $netProtocol_list"
-alldemo="$common_list $netProtocol_list"
+alldemo="$algorithm_list $common_list $netProtocol_list"
 
 usage()
 {
