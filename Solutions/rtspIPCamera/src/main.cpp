@@ -37,7 +37,7 @@ static SrcCfg_t SrcCfg_tab[] = {
 
 	}, {
 		.loaction  = "/dev/video39",
-		.videoDesc = {"NV12", FALSE, 1920, 1080, 60, 0, "h265"},
+		.videoDesc = {"NV12", FALSE, 1920, 1080, 30, 0, "h265"},
 		.audioDstType = "null",
     }
 };
