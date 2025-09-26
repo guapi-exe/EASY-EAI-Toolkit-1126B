@@ -20,7 +20,8 @@ int main(int argc, char **argv)
     int ret;
     int cameraIndex = 22; 
     char *pbuf = NULL;
-
+    int frame_count = 0;  // 帧计数
+    
     face_detect_init(&ctx, "face_detect.model");
     printf("face_detect_init done.\n");
 
@@ -37,7 +38,7 @@ int main(int argc, char **argv)
         ret = -1;
         goto exit_cam;
     }
-    int frame_count = 0;  // 帧计数
+    
     while (true) {
         ret = mipicamera_getframe(cameraIndex, pbuf);
         if (ret) {
