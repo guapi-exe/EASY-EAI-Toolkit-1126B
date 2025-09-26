@@ -81,7 +81,7 @@ int main(int argc, char **argv)
     if (pbuf) {
         free(pbuf);
     }
-    cv::destroyAllWindows();
+    //cv::destroyAllWindows();
 
 exit_cam:
     mipicamera_exit(cameraIndex); 

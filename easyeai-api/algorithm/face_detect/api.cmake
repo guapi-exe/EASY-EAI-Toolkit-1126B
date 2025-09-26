@@ -18,7 +18,7 @@ set(OpenCV_LIBS
 #    opencv_dnn 
 #    opencv_features2d 
 #    opencv_flann 
-#    opencv_highgui 
+    opencv_highgui 
 #    opencv_ml 
 #    opencv_objdetect 
 #    opencv_photo 
