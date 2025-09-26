@@ -20,15 +20,12 @@ add_definitions(-Wall -Wpointer-arith)
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
-set(media_root      ${toolkit_root}/media)
 
 include (${algorithm_root}/face_detect/api.cmake)
-include (${media_root}/rgs/api.cmake)
 ## api头文件路径
 set(api_inc 
     include/
     ${FACE_DETECT_INCLUDE_DIRS} 
-    ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
