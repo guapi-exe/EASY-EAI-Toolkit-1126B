@@ -37,6 +37,7 @@ int main(int argc, char **argv)
         ret = -1;
         goto exit_cam;
     }
+    int frame_count = 0;  // 帧计数
     while (true) {
         ret = mipicamera_getframe(cameraIndex, pbuf);
         if (ret) {
@@ -61,7 +62,7 @@ int main(int argc, char **argv)
         printf("Detection time: %f ms\n", time_use / 1000);
         printf("Faces found: %d\n", (int)result.size());
 
-        // d. 在帧上绘制检测结果
+        // 在帧上绘制检测结果
         for (int i = 0; i < (int)result.size(); i++) {
             int x = (int)(result[i].box.x);
             int y = (int)(result[i].box.y);
@@ -74,8 +75,31 @@ int main(int argc, char **argv)
             }
         }
 
-        //cv::imshow("Face Detection", frame);
+        // 每30帧保存一次图片
+        frame_count++;
+        if (!result.empty() && frame_count % 30 == 0) {
+            // 保存原始帧
+            char full_img_name[128];
+            snprintf(full_img_name, sizeof(full_img_name), "frame_%05d.jpg", frame_count);
+            imwrite(full_img_name, frame);
+            printf("Saved full frame: %s\n", full_img_name);
 
+            // 保存人脸裁剪图片（逐个保存）
+            for (int i = 0; i < (int)result.size(); i++) {
+                int x = std::max(0, (int)result[i].box.x);
+                int y = std::max(0, (int)result[i].box.y);
+                int w = std::min((int)result[i].box.width, CAMERA_WIDTH - x);
+                int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y);
+                Mat face_roi = frame(Rect(x, y, w, h));
+
+                char face_img_name[128];
+                snprintf(face_img_name, sizeof(face_img_name), "face_%05d_%d.jpg", frame_count, i);
+                imwrite(face_img_name, face_roi);
+                printf("Saved face crop: %s\n", face_img_name);
+            }
+        }
+
+        // cv::imshow("Face Detection", frame);
     }
 
     if (pbuf) {
