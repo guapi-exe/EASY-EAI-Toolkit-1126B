@@ -21,7 +21,7 @@ int main(int argc, char **argv)
     int cameraIndex = 22; 
     char *pbuf = NULL;
     int frame_count = 0;  // 帧计数
-    
+
     face_detect_init(&ctx, "face_detect.model");
     printf("face_detect_init done.\n");
 
@@ -78,7 +78,7 @@ int main(int argc, char **argv)
 
         // 每30帧保存一次图片
         frame_count++;
-        if (!result.empty() && frame_count % 30 == 0) {
+        if (result.size() != 0 && frame_count % 30 == 0) {
             // 保存原始帧
             char full_img_name[128];
             snprintf(full_img_name, sizeof(full_img_name), "frame_%05d.jpg", frame_count);
