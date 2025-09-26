@@ -35,9 +35,9 @@ set(api_inc
 file(GLOB api_srcs 
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
 )
 
 ## api静态库文件路径

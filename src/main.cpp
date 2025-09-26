@@ -18,7 +18,7 @@ int main(int argc, char **argv)
 {
     rknn_context ctx;
     int ret;
-    int cameraIndex = 0; // 假设摄像头索引为0
+    int cameraIndex = 22; 
     char *pbuf = NULL;
 
     face_detect_init(&ctx, "face_detect.model");
