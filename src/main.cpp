@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include "face_detect.h"
-#include "mipicamera.h" // 假设这是摄像头功能的头文件
+extern "C" {
+#include "camera.h"
+}
 
 using namespace cv;
 using namespace std;
