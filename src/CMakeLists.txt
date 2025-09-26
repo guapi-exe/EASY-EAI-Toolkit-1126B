@@ -17,7 +17,7 @@ endif()
 project(test_1)
 add_definitions(-Wall -Wpointer-arith)
 
-set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../../easyeai-api)
+set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
 
