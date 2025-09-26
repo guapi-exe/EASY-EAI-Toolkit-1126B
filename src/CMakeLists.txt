@@ -56,5 +56,5 @@ set(solutions ${CMAKE_CURRENT_SOURCE_DIR}/../../Solutions)
 #--------------------------
 set(project_name main)
 add_executable(${project_name} main.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${project_name} ${sysLib_list})
+target_link_libraries(${project_name} ${sysLib_list} opencv_highgui opencv_videoio rga rockchip_mpp)
 target_include_directories(${project_name} PRIVATE ${api_inc})
