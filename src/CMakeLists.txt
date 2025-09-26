@@ -20,12 +20,15 @@ add_definitions(-Wall -Wpointer-arith)
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
+set(media_root      ${toolkit_root}/media)
 
 include (${algorithm_root}/face_detect/api.cmake)
+include (${media_root}/rgs/api.cmake)
 ## api头文件路径
 set(api_inc 
     include/
     ${FACE_DETECT_INCLUDE_DIRS} 
+    ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
@@ -35,11 +38,11 @@ set(api_inc
 file(GLOB api_srcs 
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
 )
-
+## commonApi 源码
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/commonApi common_api_srcs)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma common_api_srcs)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera common_api_srcs)
 ## api静态库文件路径
 link_directories(
    ${FACE_DETECT_LIBS_DIRS} 
@@ -55,6 +58,6 @@ set(solutions ${CMAKE_CURRENT_SOURCE_DIR}/../../Solutions)
 # Main executable
 #--------------------------
 set(project_name main)
-add_executable(${project_name} main.cpp ${api_srcs})
+add_executable(${project_name} main.cpp ${api_srcs} ${common_api_srcs})
 target_link_libraries(${project_name} ${sysLib_list})
 target_include_directories(${project_name} PRIVATE ${api_inc})
