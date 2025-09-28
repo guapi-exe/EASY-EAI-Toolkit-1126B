@@ -4,6 +4,7 @@
 #include <string>
 #include "person_detect.h"
 #include "face_detect.h"
+#include "person_data.h"
 extern "C" {
 #include "camera.h"
 }
@@ -58,6 +59,7 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
     if (!pbuf) { printf("malloc failed\n"); ret = -1; goto exit_cam; }
 
     while (true) {
+        frame_count++;
         ret = mipicamera_getframe(cameraIndex, pbuf);
         if (ret) { printf("getframe failed\n"); break; }
 
@@ -78,17 +80,66 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         for (int i = 0; i < detect_result_group.count; i++) {
             detect_result_t* det_result = &(detect_result_group.results[i]);
             if(det_result->prop < 0.4) continue;
+            
+            BOX_RECT box = det_result->box;
+            float hist[FEATURE_HIST_BIN];
+            calc_histogram(rgb_data, img_w, img_h, box, hist);
 
+            int matched_id = -1;
+            for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
+                if (!g_person_list[j].active) continue;
+                if (is_same_person(&g_person_list[j], box, hist)) {
+                    matched_id = g_person_list[j].id;
+                    g_person_list[j].last_seen_frame = frame_id;
+                    g_person_list[j].box = box;
+                    break;
+                }
+            }
+
+            if (matched_id == -1) {
+                printf("New person detected (frame %d)!\n", frame_id);
+                save_and_upload_person(rgb_data, img_w, img_h, box);
+
+                // 加入缓存
+                for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
+                    if (!g_person_list[j].active) {
+                        g_person_list[j].active = 1;
+                        g_person_list[j].id = g_next_person_id++;
+                        g_person_list[j].box = box;
+                        memcpy(g_person_list[j].color_hist, hist, sizeof(hist));
+                        g_person_list[j].last_seen_frame = frame_id;
+                        break;
+                    }
+                }
+            }
             sprintf(text, "%s %.1f%%", det_result->name, det_result->prop*100);
             plot_one_box(frame, det_result->box.left, det_result->box.right,
                          det_result->box.top, det_result->box.bottom, text, i % 10);
         }
-
-        frame_count++;
+        for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
+            if (g_person_list[j].active && frame_id - g_person_list[j].last_seen_frame > 50) {
+                g_person_list[j].active = 0;
+            }
+        }
+        
         if (detect_result_group.count && frame_count % 30 == 0) {
+            /*
             char save_name[128];
             snprintf(save_name, sizeof(save_name), "person_frame_%05d.jpg", frame_count);
             imwrite(save_name, frame);
+
+            for (int i = 0; i < (int)result.size(); i++) 
+            { 
+                int x = std::max(0, (int)result[i].box.x); 
+                int y = std::max(0, (int)result[i].box.y); 
+                int w = std::min((int)result[i].box.width, CAMERA_WIDTH - x); 
+                int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
+                Mat person_roi = frame(Rect(x, y, w, h)); char person_img_name[128]; 
+                snprintf(person_img_name, sizeof(person_img_name), "person_%05d_%d.jpg", frame_count, i); 
+                imwrite(person_img_name, person_roi); printf("Saved person crop: %s\n", person_img_name); 
+            }
+            */
+            
         }
     }
 
@@ -146,9 +197,23 @@ int run_face_detect_video(const char *model_path, int cameraIndex = 0)
 
         frame_count++;
         if (result.size() && frame_count % 30 == 0) {
-            //char save_name[128];
-            //snprintf(save_name, sizeof(save_name), "face_frame_%05d.jpg", frame_count);
-            //imwrite(save_name, frame);
+            
+            /*
+            char save_name[128];
+            snprintf(save_name, sizeof(save_name), "face_frame_%05d.jpg", frame_count);
+            imwrite(save_name, frame);
+            for (int i = 0; i < (int)result.size(); i++) 
+            { 
+                int x = std::max(0, (int)result[i].box.x); 
+                int y = std::max(0, (int)result[i].box.y); 
+                int w = std::min((int)result[i].box.width, CAMERA_WIDTH - x); 
+                int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
+                Mat face_roi = frame(Rect(x, y, w, h)); char face_img_name[128]; 
+                snprintf(face_img_name, sizeof(face_img_name), "face_%05d_%d.jpg", frame_count, i); 
+                imwrite(face_img_name, face_roi); printf("Saved face crop: %s\n", face_img_name); 
+            }
+            */
+            
         }
     }
 
