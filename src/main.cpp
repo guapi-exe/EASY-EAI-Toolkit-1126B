@@ -79,43 +79,28 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         char text[256];
         for (int i = 0; i < detect_result_group.count; i++) {
             detect_result_t* det_result = &(detect_result_group.results[i]);
-            if(det_result->prop < 0.4) continue;
-            
+            if (det_result->prop < 0.4) continue;
+
             BOX_RECT box = det_result->box;
-            float hist[FEATURE_HIST_BIN];
-            calc_histogram(rgb_data, img_w, img_h, box, hist);
+            int x1 = std::max(0, box.left);
+            int y1 = std::max(0, box.top);
+            int x2 = std::min(CAMERA_WIDTH - 1, box.right);
+            int y2 = std::min(CAMERA_HEIGHT - 1, box.bottom);
 
-            int matched_id = -1;
-            for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
-                if (!g_person_list[j].active) continue;
-                if (is_same_person(&g_person_list[j], box, hist)) {
-                    matched_id = g_person_list[j].id;
-                    g_person_list[j].last_seen_frame = frame_id;
-                    g_person_list[j].box = box;
-                    break;
-                }
-            }
+            int img_w = std::max(0, x2 - x1);
+            int img_h = std::max(0, y2 - y1);
 
-            if (matched_id == -1) {
-                printf("New person detected (frame %d)!\n", frame_id);
-                save_and_upload_person(rgb_data, img_w, img_h, box);
+            if (img_w <= 0 || img_h <= 0) continue;  // 防止无效ROI
 
-                // 加入缓存
-                for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
-                    if (!g_person_list[j].active) {
-                        g_person_list[j].active = 1;
-                        g_person_list[j].id = g_next_person_id++;
-                        g_person_list[j].box = box;
-                        memcpy(g_person_list[j].color_hist, hist, sizeof(hist));
-                        g_person_list[j].last_seen_frame = frame_id;
-                        break;
-                    }
-                }
-            }
-            sprintf(text, "%s %.1f%%", det_result->name, det_result->prop*100);
-            plot_one_box(frame, det_result->box.left, det_result->box.right,
-                         det_result->box.top, det_result->box.bottom, text, i % 10);
+            cv::Mat person_roi = frame(cv::Rect(x1, y1, img_w, img_h));
+            uint8_t *rgb_data = person_roi.data;
+
+            int person_id = match_or_register_person(rgb_data, img_w, img_h, box, frame_id);
+
+            sprintf(text, "%s %.1f%%", det_result->name, det_result->prop * 100);
+            plot_one_box(frame, box.left, box.right, box.top, box.bottom, text, i % 10);
         }
+
         for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
             if (g_person_list[j].active && frame_id - g_person_list[j].last_seen_frame > 50) {
                 g_person_list[j].active = 0;
