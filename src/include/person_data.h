@@ -22,6 +22,6 @@ int is_same_person(PersonRecord *p, BOX_RECT box, float hist[FEATURE_HIST_BIN]);
 void calc_histogram(const uint8_t *rgb, int img_w, int img_h,BOX_RECT box, float hist[FEATURE_HIST_BIN]);
 void reset_person_list();
 int match_or_register_person(const uint8_t *rgb, int img_w, int img_h, BOX_RECT box, uint64_t frame_id);
-float hist_distance(float hist1[FEATURE_HIST_BIN], float hist2[FEATURE_HIST_BIN]);
+float hist_distance(const float *a, const float *b)
 
 #endif
