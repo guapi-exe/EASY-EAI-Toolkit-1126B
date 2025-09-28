@@ -172,10 +172,10 @@ int main(int argc, char **argv)
 
     if (mode == "person") {
         if (!model_path) model_path = "person_detect.model";
-        return run_person_detect_video(model_path);
+        return run_person_detect_video(model_path, 22);
     } else if (mode == "face") {
         if (!model_path) model_path = "face_detect.model";
-        return run_face_detect_video(model_path);
+        return run_face_detect_video(model_path, 22);
     } else {
         printf("Unknown mode: %s\n", mode.c_str());
         return -1;
