@@ -3,6 +3,9 @@
 #include "person_detect.h"
 #include <string.h>
 
+PersonRecord g_person_list[MAX_TRACKED_PERSON];
+int g_next_person_id = 1;
+
 void reset_person_list() {
     memset(g_person_list, 0, sizeof(g_person_list));
     g_next_person_id = 1;
