@@ -2,7 +2,9 @@
 #include <opencv2/core.hpp>
 #include <opencv2/video/tracking.hpp>
 #include <algorithm>
+extern "C" {
 #include "log.h"
+}
 
 static std::vector<Track> g_tracks;
 static int g_next_id = 1;
