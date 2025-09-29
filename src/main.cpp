@@ -5,6 +5,7 @@
 #include "person_detect.h"
 #include "face_detect.h"
 #include "person_data.h"
+#include "sort_tracker.h"
 extern "C" {
 #include "camera.h"
 }
@@ -76,34 +77,38 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
         printf("Person Detection time: %f ms, count=%d\n", time_use / 1000, detect_result_group.count);
 
-        char text[256];
+        std::vector<Detection> dets;
         for (int i = 0; i < detect_result_group.count; i++) {
-            detect_result_t* det_result = &(detect_result_group.results[i]);
-            if (det_result->prop < 0.4) continue;
+            detect_result_t* det = &(detect_result_group.results[i]);
+            if (det->prop < 0.4) continue;
 
-            BOX_RECT box = det_result->box;
-            int x1 = std::max(0, box.left);
-            int y1 = std::max(0, box.top);
-            int x2 = std::min(CAMERA_WIDTH - 1, box.right);
-            int y2 = std::min(CAMERA_HEIGHT - 1, box.bottom);
-
-            int img_w = std::max(0, x2 - x1);
-            int img_h = std::max(0, y2 - y1);
-
-            if (img_w <= 0 || img_h <= 0) continue;  // 防止无效ROI
-
-            cv::Mat person_roi = frame(cv::Rect(x1, y1, img_w, img_h));
-            uint8_t *rgb_data = person_roi.data;
-
-            int person_id = match_or_register_person(rgb_data, img_w, img_h, box, frame_id);
-
-            sprintf(text, "%s %.1f%%", det_result->name, det_result->prop * 100);
-            plot_one_box(frame, box.left, box.right, box.top, box.bottom, text, i % 10);
+            Detection d;
+            d.x1 = det->box.left;
+            d.y1 = det->box.top;
+            d.x2 = det->box.right;
+            d.y2 = det->box.bottom;
+            d.score = det->prop;
+            d.class_id = det->class_index;
+            dets.push_back(d);
         }
 
-        for (int j = 0; j < MAX_TRACKED_PERSON; j++) {
-            if (g_person_list[j].active && frame_id - g_person_list[j].last_seen_frame > 50) {
-                g_person_list[j].active = 0;
+        sort_update(dets);
+        const auto &tracks = sort_get_tracks();
+
+        for (const auto &t : tracks) {
+            cv::rectangle(frame, t.bbox, cv::Scalar(0, 255, 0), 2);
+            char label[64];
+            sprintf(label, "ID:%d", t.id);
+            cv::putText(frame, label, cv::Point(t.bbox.x, t.bbox.y - 5),
+            cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 255), 2);
+
+            if (t.lost_frames == 0 && (frame_id % 30 == 0)) {
+                cv::Mat roi = frame(t.bbox);
+                char person_img_name[128];
+                snprintf(person_img_name, sizeof(person_img_name),
+                        "track_person_%05llu_%d.jpg", frame_id, t.id);
+                cv::imwrite(person_img_name, roi);
+                printf("Saved track person: %s\n", person_img_name);
             }
         }
         
