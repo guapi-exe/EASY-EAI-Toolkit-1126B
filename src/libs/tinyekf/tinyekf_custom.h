@@ -6,6 +6,8 @@
  * MIT License
  */
 
+#include "tinyekf.h"
+
 /// @private
 static void outer(
         const _float_t x[EKF_N],
