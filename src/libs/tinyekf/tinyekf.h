@@ -1,3 +1,6 @@
+#ifndef TINYEKF_H
+#define TINYEKF_H
+
 /*
  * Extended Kalman Filter for embedded processors
  *
@@ -329,3 +332,5 @@ static bool ekf_update(
     // success
     return true;
 }
+
+#endif

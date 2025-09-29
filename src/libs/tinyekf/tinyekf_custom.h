@@ -1,3 +1,6 @@
+#ifndef TINYEKF_CUSTOM_H
+#define TINYEKF_CUSTOM_H
+
 /**
  * Custom EKF methods
  *
@@ -119,3 +122,5 @@ static void ekf_custom_scalar_update(
         }
     }
 }
+
+#endif
