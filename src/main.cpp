@@ -224,7 +224,7 @@ int main(int argc, char **argv)
 
     string mode = argv[1];
     const char *model_path = (argc >= 3) ? argv[2] : nullptr;
-
+    sort_init();
     if (mode == "person") {
         if (!model_path) model_path = "person_detect.model";
         return run_person_detect_video(model_path, 22);

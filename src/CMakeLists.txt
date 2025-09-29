@@ -31,7 +31,7 @@ set(OpenCV_LIBS
 #    opencv_photo 
 #    opencv_stitching
     opencv_videoio 
-#    opencv_video  
+    opencv_video  
 )
 
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
