@@ -1,115 +1,151 @@
 #include "sort_tracker.h"
-#include <opencv2/core.hpp>
-#include <opencv2/video/tracking.hpp>
+#include <vector>
+#include <opencv2/opencv.hpp>
 #include <algorithm>
+#include <cstdio>
 extern "C" {
 #include "log.h"
 }
 
-static std::vector<Track> g_tracks;
-static int g_next_id = 1;
-static const int MAX_LOST = 30; // 轨迹丢失多少帧删除
-
-static int next_id = 1;
 static std::vector<Track> tracks;
+static int next_id = 1;
+static const int MAX_MISSED = 30;
 
-static float iou(const Track& t, const Detection& d)
-{
-    float xx1 = std::max(t.x1, d.x1);
-    float yy1 = std::max(t.y1, d.y1);
-    float xx2 = std::min(t.x2, d.x2);
-    float yy2 = std::min(t.y2, d.y2);
+
+static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
+    float xx1 = std::max(a.x, b.x);
+    float yy1 = std::max(a.y, b.y);
+    float xx2 = std::min(a.x + a.width, b.x + b.width);
+    float yy2 = std::min(a.y + a.height, b.y + b.height);
     float w = std::max(0.0f, xx2 - xx1);
     float h = std::max(0.0f, yy2 - yy1);
     float inter = w * h;
-    float area_t = (t.x2 - t.x1) * (t.y2 - t.y1);
-    float area_d = (d.x2 - d.x1) * (d.y2 - d.y1);
-    return inter / (area_t + area_d - inter + 1e-6f);
+    return inter / (a.area() + b.area() - inter + 1e-6f);
 }
 
-void sort_init()
-{
-    tracks.clear();
-    next_id = 1;
+static cv::Mat calc_hist(const cv::Mat& roi) {
+    cv::Mat hsv;
+    cv::cvtColor(roi, hsv, cv::COLOR_BGR2HSV);
+    int h_bins = 16;
+    int s_bins = 16;
+    int histSize[] = {h_bins, s_bins};
+    float h_ranges[] = {0,180};
+    float s_ranges[] = {0,256};
+    const float* ranges[] = {h_ranges, s_ranges};
+    int channels[] = {0,1};
+    cv::Mat hist;
+    cv::calcHist(&hsv, 1, channels, cv::Mat(), hist, 2, histSize, ranges);
+    cv::normalize(hist, hist, 0, 1, cv::NORM_MINMAX);
+    return hist;
 }
 
-static void predict(Track& t)
-{
-    t.x1 += t.vx;
-    t.y1 += t.vy;
-    t.x2 += t.vw;
-    t.y2 += t.vh;
-    t.age++;
-    t.missed++;
+static float hist_distance(const cv::Mat& a, const cv::Mat& b) {
+    return cv::compareHist(a, b, cv::HISTCMP_BHATTACHARYYA);
 }
 
-static void correct(Track& t, const Detection& d)
-{
-    // 简单 α=0.8 滤波
-    float alpha = 0.8f;
-    float new_x1 = alpha * t.x1 + (1 - alpha) * d.x1;
-    float new_y1 = alpha * t.y1 + (1 - alpha) * d.y1;
-    float new_x2 = alpha * t.x2 + (1 - alpha) * d.x2;
-    float new_y2 = alpha * t.y2 + (1 - alpha) * d.y2;
 
-    t.vx = new_x1 - t.x1;
-    t.vy = new_y1 - t.y1;
-    t.vw = new_x2 - t.x2;
-    t.vh = new_y2 - t.y2;
+std::vector<Track> sort_update(const std::vector<Detection>& dets) {
+    for (auto& t : tracks) {
+        cv::Mat prediction = t.kf.predict();
+        t.bbox.x = prediction.at<float>(0);
+        t.bbox.y = prediction.at<float>(1);
+        t.bbox.width  = prediction.at<float>(2);
+        t.bbox.height = prediction.at<float>(3);
+        t.age++;
+        t.missed++;
+    }
 
-    t.x1 = new_x1;
-    t.y1 = new_y1;
-    t.x2 = new_x2;
-    t.y2 = new_y2;
-    t.missed = 0;
-    t.active = true;
-}
-
-std::vector<Track> sort_update(const std::vector<Detection>& dets)
-{
-    // 1️ 预测所有已有 track
-    for (auto& t : tracks) predict(t);
-
-    // 2️ 关联检测结果
-    std::vector<int> det_assigned(dets.size(), -1);
-
-    for (size_t i = 0; i < dets.size(); i++) {
-        float best_iou = 0.0f;
-        int best_j = -1;
-        for (size_t j = 0; j < tracks.size(); j++) {
-            float iou_score = iou(tracks[j], dets[i]);
-            if (iou_score > 0.3f && iou_score > best_iou) {
-                best_iou = iou_score;
-                best_j = j;
-            }
-        }
-        if (best_j != -1) {
-            correct(tracks[best_j], dets[i]);
-            det_assigned[i] = best_j;
+    int N = tracks.size();
+    int M = dets.size();
+    std::vector<std::vector<float>> cost(N, std::vector<float>(M, 1.0f)); // 1 - IOU
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < M; j++) {
+            float iou_score = iou(tracks[i].bbox, cv::Rect2f(dets[j].x1, dets[j].y1,
+                                                              dets[j].x2 - dets[j].x1,
+                                                              dets[j].y2 - dets[j].y1));
+            float hist_score = hist_distance(tracks[i].hist, calc_hist(dets[j].roi));
+            cost[i][j] = 1.0f - iou_score + hist_score; // 越小越匹配
         }
     }
 
-    // 3️对未匹配的检测，创建新 track
-    for (size_t i = 0; i < dets.size(); i++) {
-        if (det_assigned[i] == -1) {
+    std::vector<int> det_assigned(M, -1);
+    std::vector<bool> track_assigned(N, false);
+
+    for (int j = 0; j < M; j++) {
+        float min_cost = 1e6;
+        int best_i = -1;
+        for (int i = 0; i < N; i++) {
+            if (track_assigned[i]) continue;
+            if (cost[i][j] < 0.7f && cost[i][j] < min_cost) { // 匹配阈值
+                min_cost = cost[i][j];
+                best_i = i;
+            }
+        }
+        if (best_i != -1) {
+            track_assigned[best_i] = true;
+            det_assigned[j] = best_i;
+
+            // 修正 Kalman
+            cv::Mat measurement(4,1,CV_32F);
+            measurement.at<float>(0) = dets[j].x1;
+            measurement.at<float>(1) = dets[j].y1;
+            measurement.at<float>(2) = dets[j].x2 - dets[j].x1;
+            measurement.at<float>(3) = dets[j].y2 - dets[j].y1;
+            tracks[best_i].kf.correct(measurement);
+
+            tracks[best_i].bbox = cv::Rect2f(dets[j].x1, dets[j].y1,
+                                             dets[j].x2 - dets[j].x1,
+                                             dets[j].y2 - dets[j].y1);
+            tracks[best_i].hist = calc_hist(dets[j].roi);
+            tracks[best_i].missed = 0;
+            tracks[best_i].active = true;
+        }
+    }
+
+    for (int j = 0; j < M; j++) {
+        if (det_assigned[j] == -1) {
             Track t;
             t.id = next_id++;
-            t.x1 = dets[i].x1;
-            t.y1 = dets[i].y1;
-            t.x2 = dets[i].x2;
-            t.y2 = dets[i].y2;
-            t.vx = t.vy = t.vw = t.vh = 0;
+            t.kf = cv::KalmanFilter(4,4,0);
+            t.kf.transitionMatrix = (cv::Mat_<float>(4,4) << 
+                                      1,0,1,0,
+                                      0,1,0,1,
+                                      0,0,1,0,
+                                      0,0,0,1);
+            cv::setIdentity(t.kf.measurementMatrix);
+            cv::setIdentity(t.kf.processNoiseCov, cv::Scalar::all(1e-2));
+            cv::setIdentity(t.kf.measurementNoiseCov, cv::Scalar::all(1e-1));
+            cv::setIdentity(t.kf.errorCovPost, cv::Scalar::all(1));
+
+            cv::Mat state(4,1,CV_32F);
+            state.at<float>(0) = dets[j].x1;
+            state.at<float>(1) = dets[j].y1;
+            state.at<float>(2) = dets[j].x2 - dets[j].x1;
+            state.at<float>(3) = dets[j].y2 - dets[j].y1;
+            t.kf.statePost = state;
+
+            t.bbox = cv::Rect2f(dets[j].x1, dets[j].y1,
+                                dets[j].x2 - dets[j].x1,
+                                dets[j].y2 - dets[j].y1);
+            t.hist = calc_hist(dets[j].roi);
             t.age = 1;
             t.missed = 0;
             t.active = true;
-            tracks.push_back(t);
 
+            tracks.push_back(t);
             log_debug("New person appeared: ID=%d\n", t.id);
         }
     }
 
     tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
-        [](const Track& t){ return t.missed > MAX_LOST; }), tracks.end());
+                [](const Track& t){
+                    if(t.missed > MAX_MISSED) {
+                        log_debug("Person disappeared: ID=%d\n", t.id);
+                        return true;
+                    }
+                    return false;
+                }), tracks.end());
 
     return tracks;
 }
+

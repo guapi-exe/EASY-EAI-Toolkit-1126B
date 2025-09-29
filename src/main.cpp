@@ -79,26 +79,28 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         log_debug("Person Detection time: %f ms, count=%d\n", time_use / 1000, detect_result_group.count);
 
         std::vector<Detection> dets;
-        for (int i = 0; i < detect_result_group.count; i++) {
-            detect_result_t* det_result = &(detect_result_group.results[i]);
-            if (det_result->prop < 0.4) continue;
-
-            Detection d;
-            d.x1 = det_result->box.left;
-            d.y1 = det_result->box.top;
-            d.x2 = det_result->box.right;
-            d.y2 = det_result->box.bottom;
-            d.score = det_result->prop;
-            dets.push_back(d);
+        for (int i=0;i<detect_result_group.count;i++){
+            detect_result_t& d = detect_result_group.results[i];
+            if (d.prop < 0.4) continue;
+            cv::Rect roi_rect(d.box.left,d.box.top,
+                            d.box.right - d.box.left,
+                            d.box.bottom - d.box.top);
+            Detection det;
+            det.x1 = d.box.left;
+            det.y1 = d.box.top;
+            det.x2 = d.box.right;
+            det.y2 = d.box.bottom;
+            det.roi = frame(roi_rect).clone(); 
+            dets.push_back(det);
         }
 
         std::vector<Track> tracks = sort_update(dets);
 
-        for (const auto &t : tracks) {
-            int x1 = std::max(0, (int)std::round(t.x1));
-            int y1 = std::max(0, (int)std::round(t.y1));
-            int x2 = std::min(CAMERA_WIDTH - 1, (int)std::round(t.x2));
-            int y2 = std::min(CAMERA_HEIGHT - 1, (int)std::round(t.y2));
+        for (auto &t : tracks) {
+            int x1 = std::max(0, (int)std::round(t.bbox.x));
+            int y1 = std::max(0, (int)std::round(t.bbox.y));
+            int x2 = std::min(CAMERA_WIDTH - 1, (int)std::round(t.bbox.x + t.bbox.width));
+            int y2 = std::min(CAMERA_HEIGHT - 1, (int)std::round(t.bbox.y + t.bbox.height));
 
             int w = x2 - x1;
             int h = y2 - y1;
@@ -119,7 +121,16 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
                 cv::imwrite(person_img_name, roi);
                 log_debug("Saved track person: %s\n", person_img_name);
             }
+
+            if (t.age == 1) {
+                log_debug("New person appeared: ID=%d\n", t.id);
+            }
+
+            if (t.missed > 0 && t.missed == 1) {
+                log_debug("Person disappeared: ID=%d\n", t.id);
+            }
         }
+
                 
         if (detect_result_group.count && frame_id % 30 == 0) {
             /*

@@ -5,16 +5,17 @@
 #include <cstdint>
 
 struct Detection {
-    float x1, y1, x2, y2;  // bbox
-    float score;
+    float x1, y1, x2, y2;
+    cv::Mat roi;  // 用于计算颜色直方图
 };
 
 struct Track {
     int id;
-    float x1, y1, x2, y2;
-    float vx, vy, vw, vh;  // 速度分量
-    int age;              // 存活帧数
-    int missed;           // 丢失帧数
+    cv::KalmanFilter kf;
+    cv::Mat hist; // 颜色直方图
+    cv::Rect2f bbox;
+    int age;
+    int missed; // 丢失帧数
     bool active;
 };
 
