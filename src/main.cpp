@@ -82,15 +82,23 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         for (int i=0;i<detect_result_group.count;i++){
             detect_result_t& d = detect_result_group.results[i];
             if (d.prop < 0.4) continue;
-            cv::Rect roi_rect(d.box.left,d.box.top,
-                            d.box.right - d.box.left,
-                            d.box.bottom - d.box.top);
+            int x1 = std::max(0, d.box.left);
+            int y1 = std::max(0, d.box.top);
+            int x2 = std::min(CAMERA_WIDTH - 1, d.box.right);
+            int y2 = std::min(CAMERA_HEIGHT - 1, d.box.bottom);
+
+            int w = x2 - x1;
+            int h = y2 - y1;
+            if (w <= 0 || h <= 0) continue; // 无效框直接跳过
+
+            cv::Rect roi_rect(x1, y1, w, h);
             Detection det;
-            det.x1 = d.box.left;
-            det.y1 = d.box.top;
-            det.x2 = d.box.right;
-            det.y2 = d.box.bottom;
-            det.roi = frame(roi_rect).clone(); 
+            det.roi = frame(roi_rect).clone();
+            det.x1 = x1;
+            det.y1 = y1;
+            det.x2 = x2;
+            det.y2 = y2;
+
             dets.push_back(det);
         }
 
