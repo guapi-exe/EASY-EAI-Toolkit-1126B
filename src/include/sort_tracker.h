@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstdio>
 
+#define EKF_N 8
+#define EKF_M 4
+
 using namespace cv;
 
 struct Detection {
