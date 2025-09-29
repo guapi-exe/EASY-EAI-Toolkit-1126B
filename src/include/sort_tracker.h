@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstdio>
 
+using namespace cv;
+
 struct Detection {
     float x1, y1, x2, y2;
     cv::Mat roi;  // 用于计算颜色直方图
