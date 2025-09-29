@@ -79,39 +79,47 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
 
         std::vector<Detection> dets;
         for (int i = 0; i < detect_result_group.count; i++) {
-            detect_result_t* det = &(detect_result_group.results[i]);
-            if (det->prop < 0.4) continue;
+            detect_result_t* det_result = &(detect_result_group.results[i]);
+            if (det_result->prop < 0.4) continue;
 
             Detection d;
-            d.x1 = det->box.left;
-            d.y1 = det->box.top;
-            d.x2 = det->box.right;
-            d.y2 = det->box.bottom;
-            d.score = det->prop;
-            d.class_id = det->class_index;
+            d.x1 = det_result->box.left;
+            d.y1 = det_result->box.top;
+            d.x2 = det_result->box.right;
+            d.y2 = det_result->box.bottom;
+            d.score = det_result->prop;
             dets.push_back(d);
         }
 
-        sort_update(dets);
-        const auto &tracks = sort_get_tracks();
+        std::vector<Track> tracks = sort_update(dets);
 
         for (const auto &t : tracks) {
-            cv::rectangle(frame, t.bbox, cv::Scalar(0, 255, 0), 2);
+            int x1 = std::max(0, (int)std::round(t.x1));
+            int y1 = std::max(0, (int)std::round(t.y1));
+            int x2 = std::min(CAMERA_WIDTH - 1, (int)std::round(t.x2));
+            int y2 = std::min(CAMERA_HEIGHT - 1, (int)std::round(t.y2));
+
+            int w = x2 - x1;
+            int h = y2 - y1;
+            if (w <= 0 || h <= 0) continue;
+
+            cv::rectangle(frame, cv::Rect(x1, y1, w, h), cv::Scalar(0, 255, 0), 2);
+
             char label[64];
             sprintf(label, "ID:%d", t.id);
-            cv::putText(frame, label, cv::Point(t.bbox.x, t.bbox.y - 5),
-            cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 255), 2);
+            cv::putText(frame, label, cv::Point(x1, y1 - 5),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 255), 2);
 
-            if (t.lost_frames == 0 && (frame_id % 30 == 0)) {
-                cv::Mat roi = frame(t.bbox);
+            if (t.missed == 0 && (frame_id % 30 == 0)) {
+                cv::Mat roi = frame(cv::Rect(x1, y1, w, h)).clone();  
                 char person_img_name[128];
                 snprintf(person_img_name, sizeof(person_img_name),
-                        "track_person_%05llu_%d.jpg", frame_id, t.id);
+                        "track_person_%05d_%d.jpg", frame_id, t.id);
                 cv::imwrite(person_img_name, roi);
                 printf("Saved track person: %s\n", person_img_name);
             }
         }
-        
+                
         if (detect_result_group.count && frame_id % 30 == 0) {
             /*
             char save_name[128];

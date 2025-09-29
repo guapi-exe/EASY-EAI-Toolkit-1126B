@@ -7,92 +7,104 @@ static std::vector<Track> g_tracks;
 static int g_next_id = 1;
 static const int MAX_LOST = 30; // 轨迹丢失多少帧删除
 
-void sort_init() {
-    g_tracks.clear();
-    g_next_id = 1;
+static int next_id = 1;
+static std::vector<Track> tracks;
+
+static float iou(const Track& t, const Detection& d)
+{
+    float xx1 = std::max(t.x1, d.x1);
+    float yy1 = std::max(t.y1, d.y1);
+    float xx2 = std::min(t.x2, d.x2);
+    float yy2 = std::min(t.y2, d.y2);
+    float w = std::max(0.0f, xx2 - xx1);
+    float h = std::max(0.0f, yy2 - yy1);
+    float inter = w * h;
+    float area_t = (t.x2 - t.x1) * (t.y2 - t.y1);
+    float area_d = (d.x2 - d.x1) * (d.y2 - d.y1);
+    return inter / (area_t + area_d - inter + 1e-6f);
 }
 
-static float iou(const cv::Rect2f &a, const cv::Rect2f &b) {
-    float inter = (a & b).area();
-    float uni = a.area() + b.area() - inter;
-    return uni > 0 ? inter / uni : 0;
+void sort_init()
+{
+    tracks.clear();
+    next_id = 1;
 }
 
-void sort_update(const std::vector<Detection> &detections) {
-    // 1. 所有track预测
-    for (auto &t : g_tracks) {
-        cv::Mat pred = t.kf.predict();
-        t.bbox.x = pred.at<float>(0);
-        t.bbox.y = pred.at<float>(1);
-    }
+static void predict(Track& t)
+{
+    t.x1 += t.vx;
+    t.y1 += t.vy;
+    t.x2 += t.vw;
+    t.y2 += t.vh;
+    t.age++;
+    t.missed++;
+}
 
-    // 2. 匹配
-    std::vector<int> det_matched(detections.size(), -1);
-    for (int i = 0; i < g_tracks.size(); i++) {
-        float best_iou = 0;
-        int best_det = -1;
-        for (int j = 0; j < detections.size(); j++) {
-            if (det_matched[j] != -1) continue;
-            cv::Rect2f det_box(detections[j].x1, detections[j].y1,
-                               detections[j].x2 - detections[j].x1,
-                               detections[j].y2 - detections[j].y1);
-            float ov = iou(g_tracks[i].bbox, det_box);
-            if (ov > 0.3 && ov > best_iou) {
-                best_iou = ov;
-                best_det = j;
+static void correct(Track& t, const Detection& d)
+{
+    // 简单 α=0.8 滤波
+    float alpha = 0.8f;
+    float new_x1 = alpha * t.x1 + (1 - alpha) * d.x1;
+    float new_y1 = alpha * t.y1 + (1 - alpha) * d.y1;
+    float new_x2 = alpha * t.x2 + (1 - alpha) * d.x2;
+    float new_y2 = alpha * t.y2 + (1 - alpha) * d.y2;
+
+    t.vx = new_x1 - t.x1;
+    t.vy = new_y1 - t.y1;
+    t.vw = new_x2 - t.x2;
+    t.vh = new_y2 - t.y2;
+
+    t.x1 = new_x1;
+    t.y1 = new_y1;
+    t.x2 = new_x2;
+    t.y2 = new_y2;
+    t.missed = 0;
+    t.active = true;
+}
+
+std::vector<Track> sort_update(const std::vector<Detection>& dets)
+{
+    // 1️ 预测所有已有 track
+    for (auto& t : tracks) predict(t);
+
+    // 2️ 关联检测结果
+    std::vector<int> det_assigned(dets.size(), -1);
+
+    for (size_t i = 0; i < dets.size(); i++) {
+        float best_iou = 0.0f;
+        int best_j = -1;
+        for (size_t j = 0; j < tracks.size(); j++) {
+            float iou_score = iou(tracks[j], dets[i]);
+            if (iou_score > 0.3f && iou_score > best_iou) {
+                best_iou = iou_score;
+                best_j = j;
             }
         }
-        if (best_det != -1) {
-            // 更新track
-            const auto &det = detections[best_det];
-            cv::Rect2f det_box(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
-            cv::Mat meas(4, 1, CV_32F);
-            meas.at<float>(0) = det_box.x;
-            meas.at<float>(1) = det_box.y;
-            meas.at<float>(2) = det_box.width;
-            meas.at<float>(3) = det_box.height;
-            g_tracks[i].kf.correct(meas);
-            g_tracks[i].bbox = det_box;
-            g_tracks[i].lost_frames = 0;
-            det_matched[best_det] = i;
-        } else {
-            g_tracks[i].lost_frames++;
+        if (best_j != -1) {
+            correct(tracks[best_j], dets[i]);
+            det_assigned[i] = best_j;
         }
     }
 
-    // 3. 新检测 → 新track
-    for (int j = 0; j < detections.size(); j++) {
-        if (det_matched[j] != -1) continue;
-        Track t;
-        t.id = g_next_id++;
-        t.bbox = cv::Rect2f(detections[j].x1, detections[j].y1,
-                            detections[j].x2 - detections[j].x1,
-                            detections[j].y2 - detections[j].y1);
-        t.lost_frames = 0;
-
-        t.kf = cv::KalmanFilter(4, 4);
-        t.kf.transitionMatrix = (cv::Mat_<float>(4,4) <<
-            1,0,1,0,
-            0,1,0,1,
-            0,0,1,0,
-            0,0,0,1);
-        cv::setIdentity(t.kf.measurementMatrix);
-        cv::setIdentity(t.kf.processNoiseCov, cv::Scalar::all(1e-2));
-        cv::setIdentity(t.kf.measurementNoiseCov, cv::Scalar::all(1e-1));
-        cv::setIdentity(t.kf.errorCovPost, cv::Scalar::all(1));
-        t.kf.statePost.at<float>(0) = t.bbox.x;
-        t.kf.statePost.at<float>(1) = t.bbox.y;
-        t.kf.statePost.at<float>(2) = 0;
-        t.kf.statePost.at<float>(3) = 0;
-
-        g_tracks.push_back(t);
+    // 3️对未匹配的检测，创建新 track
+    for (size_t i = 0; i < dets.size(); i++) {
+        if (det_assigned[i] == -1) {
+            Track t;
+            t.id = next_id++;
+            t.x1 = dets[i].x1;
+            t.y1 = dets[i].y1;
+            t.x2 = dets[i].x2;
+            t.y2 = dets[i].y2;
+            t.vx = t.vy = t.vw = t.vh = 0;
+            t.age = 1;
+            t.missed = 0;
+            t.active = true;
+            tracks.push_back(t);
+        }
     }
 
-    // 4. 清理丢失轨迹
-    g_tracks.erase(std::remove_if(g_tracks.begin(), g_tracks.end(),
-        [](const Track &t){ return t.lost_frames > MAX_LOST; }), g_tracks.end());
-}
+    tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+        [](const Track& t){ return t.missed > MAX_LOST; }), tracks.end());
 
-const std::vector<Track>& sort_get_tracks() {
-    return g_tracks;
+    return tracks;
 }

@@ -1,24 +1,24 @@
-#ifndef SORT_TRACKER_H
-#define SORT_TRACKER_H
+#ifndef PERSON_SORT_H
+#define PERSON_SORT_H
 
 #include <vector>
-#include <opencv2/opencv.hpp>
+#include <cstdint>
 
-typedef struct {
-    float x1, y1, x2, y2;
+struct Detection {
+    float x1, y1, x2, y2;  // bbox
     float score;
-    int class_id;
-} Detection;
+};
 
-typedef struct {
+struct Track {
     int id;
-    cv::Rect2f bbox;
-    int lost_frames;
-    cv::KalmanFilter kf;
-} Track;
+    float x1, y1, x2, y2;
+    float vx, vy, vw, vh;  // 速度分量
+    int age;              // 存活帧数
+    int missed;           // 丢失帧数
+    bool active;
+};
 
 void sort_init();
-void sort_update(const std::vector<Detection> &detections);
-const std::vector<Track>& sort_get_tracks();
+std::vector<Track> sort_update(const std::vector<Detection>& dets);
 
 #endif
