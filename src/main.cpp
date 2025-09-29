@@ -42,20 +42,27 @@ int plot_one_box(Mat src, int x1, int x2, int y1, int y2, const char *label, cha
     return 0;
 }
 
+// 计算图像清晰度
+double compute_focus_measure(const Mat& img) {
+    Mat gray;
+    cvtColor(img, gray, COLOR_BGR2GRAY);
+    return Laplacian(gray, CV_64F).var();
+}
+
 /* 人形识别视频流处理 */
-int run_person_detect_video(const char *model_path, int cameraIndex = 0)
+int run_person_detect_video(const char *person_model_path, const char *face_model_path, int cameraIndex = 0)
 {
-    rknn_context ctx;
+    rknn_context person_ctx, face_ctx;
     int ret = 0;
     char *pbuf = nullptr;
     int frame_id = 0;
 
-    person_detect_init(&ctx, model_path);
-    log_debug("person_detect_init done.\n");
+    person_detect_init(&person_ctx, person_model_path);
+    face_detect_init(&face_ctx, face_model_path);
+    log_debug("person_detect_init & face_detect_init done.\n");
 
     ret = mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0);
     if (ret) { log_debug("mipicamera_init failed\n"); return -1; }
-    log_debug("mipicamera_init done.\n");
 
     pbuf = (char *)malloc(IMAGE_SIZE);
     if (!pbuf) { log_debug("malloc failed\n"); ret = -1; goto exit_cam; }
@@ -72,7 +79,7 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
         struct timeval start, end;
         gettimeofday(&start, NULL);
 
-        person_detect_run(ctx, frame, &detect_result_group);
+        person_detect_run(person_ctx, frame, &detect_result_group);
 
         gettimeofday(&end, NULL);
         float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
@@ -109,158 +116,74 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
             int y1 = std::max(0, (int)std::round(t.bbox.y));
             int x2 = std::min(CAMERA_WIDTH - 1, (int)std::round(t.bbox.x + t.bbox.width));
             int y2 = std::min(CAMERA_HEIGHT - 1, (int)std::round(t.bbox.y + t.bbox.height));
-
             int w = x2 - x1;
             int h = y2 - y1;
             if (w <= 0 || h <= 0) continue;
 
-            cv::rectangle(frame, cv::Rect(x1, y1, w, h), cv::Scalar(0, 255, 0), 2);
+            rectangle(frame, cv::Rect(x1, y1, w, h), cv::Scalar(0, 255, 0), 2);
+            char label[64]; sprintf(label,"ID:%d", t.id);
+            putText(frame, label, Point(x1, y1-5), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(255,255,255), 2);
 
-            char label[64];
-            sprintf(label, "ID:%d", t.id);
-            cv::putText(frame, label, cv::Point(x1, y1 - 5),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 255), 2);
-
-            if (t.missed == 0 && (frame_id % 30 == 0)) {
-                cv::Mat roi = frame(cv::Rect(x1, y1, w, h)).clone();  
-                char person_img_name[128];
-                snprintf(person_img_name, sizeof(person_img_name),
-                        "track_person_%05d_%d.jpg", frame_id, t.id);
-                cv::imwrite(person_img_name, roi);
-                log_debug("Saved track person: %s\n", person_img_name);
-            }
-
+            // **新人员出现时截图并抓取人脸**
             if (t.age == 1) {
                 log_debug("New person appeared: ID=%d\n", t.id);
-            }
 
-            if (t.missed > 0 && t.missed == 1) {
-                log_debug("Person disappeared: ID=%d\n", t.id);
-            }
-        }
+                Mat person_roi = frame(Rect(x1, y1, w, h)).clone();
+                std::vector<det> face_result;
+                face_detect_run(face_ctx, person_roi, face_result);
 
-                
-        if (detect_result_group.count && frame_id % 30 == 0) {
-            /*
-            char save_name[128];
-            snprintf(save_name, sizeof(save_name), "person_frame_%05d.jpg", frame_id);
-            imwrite(save_name, frame);
+                if (!face_result.empty()) {
+                    int fx = std::max(0, (int)face_result[0].box.x);
+                    int fy = std::max(0, (int)face_result[0].box.y);
+                    int fw = std::min((int)face_result[0].box.width, person_roi.cols - fx);
+                    int fh = std::min((int)face_result[0].box.height, person_roi.rows - fy);
 
-            for (int i = 0; i < (int)result.size(); i++) 
-            { 
-                int x = std::max(0, (int)result[i].box.x); 
-                int y = std::max(0, (int)result[i].box.y); 
-                int w = std::min((int)result[i].box.width, CAMERA_WIDTH - x); 
-                int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
-                Mat person_roi = frame(Rect(x, y, w, h)); char person_img_name[128]; 
-                snprintf(person_img_name, sizeof(person_img_name), "person_%05d_%d.jpg", frame_id, i); 
-                imwrite(person_img_name, person_roi); log_debug("Saved person crop: %s\n", person_img_name); 
+                    if (fw > 0 && fh > 0) {
+                        Mat face_aligned = person_roi(Rect(fx, fy, fw, fh)).clone();
+
+                        // 模糊检测
+                        double fm = compute_focus_measure(face_aligned);
+                        if (fm > 100) { // 阈值可调
+                            char face_name[128];
+                            snprintf(face_name, sizeof(face_name), "person_%05d_face_%d.jpg", frame_id, t.id);
+                            imwrite(face_name, face_aligned);
+                            log_debug("Saved aligned face: %s\n", face_name);
+                        } else {
+                            log_debug("Face too blurry, skip save. FM=%f\n", fm);
+                        }
+                    }
+                } else {
+                    // 无人脸，则保存整个人体ROI
+                    double fm = compute_focus_measure(person_roi);
+                    if (fm > 100) {
+                        char person_name[128];
+                        snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
+                        imwrite(person_name, person_roi);
+                        log_debug("Saved person ROI (no face): %s\n", person_name);
+                    }
+                }
             }
-            */
-            
         }
     }
 
     if (pbuf) free(pbuf);
 exit_cam:
     mipicamera_exit(cameraIndex);
-    person_detect_release(ctx);
-    return ret;
-}
-
-/* 人脸识别视频流处理 */
-int run_face_detect_video(const char *model_path, int cameraIndex = 0)
-{
-    rknn_context ctx;
-    int ret = 0;
-    char *pbuf = nullptr;
-    int frame_id = 0;
-
-    face_detect_init(&ctx, model_path);
-    log_debug("face_detect_init done.\n");
-
-    ret = mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0);
-    if (ret) { log_debug("mipicamera_init failed\n"); return -1; }
-    log_debug("mipicamera_init done.\n");
-
-    pbuf = (char *)malloc(IMAGE_SIZE);
-    if (!pbuf) { log_debug("malloc failed\n"); ret = -1; goto exit_cam; }
-
-    while (true) {
-        ret = mipicamera_getframe(cameraIndex, pbuf);
-        if (ret) { log_debug("getframe failed\n"); break; }
-
-        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, pbuf);
-        if (frame.empty()) { log_debug("frame empty\n"); break; }
-
-        std::vector<det> result;
-        struct timeval start, end;
-        gettimeofday(&start, NULL);
-        face_detect_run(ctx, frame, result);
-        gettimeofday(&end, NULL);
-        float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-        log_debug("Face Detection time: %f ms, Faces=%d\n", time_use/1000, (int)result.size());
-
-        for (int i = 0; i < (int)result.size(); i++) {
-            int x = (int)(result[i].box.x);
-            int y = (int)(result[i].box.y);
-            int w = (int)(result[i].box.width);
-            int h = (int)(result[i].box.height);
-            rectangle(frame, Rect(x, y, w, h), Scalar(0, 255, 0), 2);
-
-            for (int j = 0; j < (int)result[i].landmarks.size(); ++j) {
-                circle(frame, Point((int)result[i].landmarks[j].x, (int)result[i].landmarks[j].y), 2, Scalar(225, 0, 225), 2);
-            }
-        }
-
-        frame_id++;
-        if (result.size() && frame_id % 30 == 0) {
-            
-            /*
-            char save_name[128];
-            snprintf(save_name, sizeof(save_name), "face_frame_%05d.jpg", frame_id);
-            imwrite(save_name, frame);
-            for (int i = 0; i < (int)result.size(); i++) 
-            { 
-                int x = std::max(0, (int)result[i].box.x); 
-                int y = std::max(0, (int)result[i].box.y); 
-                int w = std::min((int)result[i].box.width, CAMERA_WIDTH - x); 
-                int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
-                Mat face_roi = frame(Rect(x, y, w, h)); char face_img_name[128]; 
-                snprintf(face_img_name, sizeof(face_img_name), "face_%05d_%d.jpg", frame_id, i); 
-                imwrite(face_img_name, face_roi); log_debug("Saved face crop: %s\n", face_img_name); 
-            }
-            */
-            
-        }
-    }
-
-    if (pbuf) free(pbuf);
-exit_cam:
-    mipicamera_exit(cameraIndex);
-    face_detect_release(ctx);
+    person_detect_release(person_ctx);
+    face_detect_release(face_ctx);
     return ret;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        log_debug("Usage: %s <mode> [model_path]\n", argv[0]);
-        log_debug("mode: person | face\n");
+    if (argc < 3) {
+        log_debug("Usage: %s <person_model> <face_model>\n", argv[0]);
         return -1;
     }
 
-    string mode = argv[1];
-    const char *model_path = (argc >= 3) ? argv[2] : nullptr;
+    const char *person_model_path = argv[1];
+    const char *face_model_path   = argv[2];
+
     sort_init();
-    if (mode == "person") {
-        if (!model_path) model_path = "person_detect.model";
-        return run_person_detect_video(model_path, 22);
-    } else if (mode == "face") {
-        if (!model_path) model_path = "face_detect.model";
-        return run_face_detect_video(model_path, 22);
-    } else {
-        log_debug("Unknown mode: %s\n", mode.c_str());
-        return -1;
-    }
+    return run_person_detect_video(person_model_path, face_model_path, 22);
 }
