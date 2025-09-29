@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <opencv2/opencv.hpp>
+#include "tinyekf.h"
 #include <algorithm>
 #include <cstdio>
 
@@ -14,7 +15,7 @@ struct Detection {
 
 struct Track {
     int id;
-    cv::KalmanFilter kf;
+    ekf_t ekf;    // 使用 tinyEKF
     cv::Mat hist; // 颜色直方图
     cv::Rect2f bbox;
     int age;

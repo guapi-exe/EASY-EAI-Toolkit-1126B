@@ -46,7 +46,8 @@ set(api_inc
     include/
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${PERSON_DETECT_INCLUDE_DIRS} 
-    ${CMAKE_CURRENT_SOURCE_DIR}/logs
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/tinyekf
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
@@ -59,7 +60,7 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/logs/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
 )
 
 ## api静态库文件路径
