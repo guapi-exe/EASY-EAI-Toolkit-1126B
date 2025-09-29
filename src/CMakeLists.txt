@@ -44,9 +44,9 @@ include (${algorithm_root}/face_detect/api.cmake)
 ## api头文件路径
 set(api_inc 
     include/
-    logs/
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${PERSON_DETECT_INCLUDE_DIRS} 
+    ${CMAKE_CURRENT_SOURCE_DIR}/logs
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
