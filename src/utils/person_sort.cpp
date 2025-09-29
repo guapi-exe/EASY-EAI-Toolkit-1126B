@@ -12,6 +12,11 @@ static int next_id = 1;
 static const int MAX_MISSED = 30;
 
 
+void sort_init() { 
+    tracks.clear(); 
+    next_id = 1; 
+}
+
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
     float xx1 = std::max(a.x, b.x);
     float yy1 = std::max(a.y, b.y);

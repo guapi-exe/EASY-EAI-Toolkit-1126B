@@ -3,6 +3,9 @@
 
 #include <vector>
 #include <cstdint>
+#include <opencv2/opencv.hpp>
+#include <algorithm>
+#include <cstdio>
 
 struct Detection {
     float x1, y1, x2, y2;
