@@ -11,6 +11,7 @@
 #include <string.h>
 
 #define EKF_N 8
+#define EKF_M 4
 
 /**
   * Floating-point precision defaults to single but can be made double via
