@@ -44,9 +44,10 @@ int plot_one_box(Mat src, int x1, int x2, int y1, int y2, const char *label, cha
 
 // 计算图像清晰度
 double compute_focus_measure(const Mat& img) {
-    Mat gray;
+    Mat gray, lap;
     cvtColor(img, gray, COLOR_BGR2GRAY);
-    return Laplacian(gray, CV_64F).var();
+    Laplacian(gray, lap, CV_64F);
+    return mean(lap.mul(lap))[0];
 }
 
 /* 人形识别视频流处理 */
