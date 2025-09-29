@@ -7,6 +7,7 @@
 #include "person_data.h"
 #include "sort_tracker.h"
 extern "C" {
+#include "log.h"
 #include "camera.h"
 }
 
@@ -50,22 +51,22 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
     int frame_id = 0;
 
     person_detect_init(&ctx, model_path);
-    printf("person_detect_init done.\n");
+    log_debug("person_detect_init done.\n");
 
     ret = mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0);
-    if (ret) { printf("mipicamera_init failed\n"); return -1; }
-    printf("mipicamera_init done.\n");
+    if (ret) { log_debug("mipicamera_init failed\n"); return -1; }
+    log_debug("mipicamera_init done.\n");
 
     pbuf = (char *)malloc(IMAGE_SIZE);
-    if (!pbuf) { printf("malloc failed\n"); ret = -1; goto exit_cam; }
+    if (!pbuf) { log_debug("malloc failed\n"); ret = -1; goto exit_cam; }
 
     while (true) {
         frame_id++;
         ret = mipicamera_getframe(cameraIndex, pbuf);
-        if (ret) { printf("getframe failed\n"); break; }
+        if (ret) { log_debug("getframe failed\n"); break; }
 
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, pbuf);
-        if (frame.empty()) { printf("frame empty\n"); break; }
+        if (frame.empty()) { log_debug("frame empty\n"); break; }
 
         detect_result_group_t detect_result_group;
         struct timeval start, end;
@@ -75,7 +76,7 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
 
         gettimeofday(&end, NULL);
         float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-        printf("Person Detection time: %f ms, count=%d\n", time_use / 1000, detect_result_group.count);
+        log_debug("Person Detection time: %f ms, count=%d\n", time_use / 1000, detect_result_group.count);
 
         std::vector<Detection> dets;
         for (int i = 0; i < detect_result_group.count; i++) {
@@ -116,7 +117,7 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
                 snprintf(person_img_name, sizeof(person_img_name),
                         "track_person_%05d_%d.jpg", frame_id, t.id);
                 cv::imwrite(person_img_name, roi);
-                printf("Saved track person: %s\n", person_img_name);
+                log_debug("Saved track person: %s\n", person_img_name);
             }
         }
                 
@@ -134,7 +135,7 @@ int run_person_detect_video(const char *model_path, int cameraIndex = 0)
                 int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
                 Mat person_roi = frame(Rect(x, y, w, h)); char person_img_name[128]; 
                 snprintf(person_img_name, sizeof(person_img_name), "person_%05d_%d.jpg", frame_id, i); 
-                imwrite(person_img_name, person_roi); printf("Saved person crop: %s\n", person_img_name); 
+                imwrite(person_img_name, person_roi); log_debug("Saved person crop: %s\n", person_img_name); 
             }
             */
             
@@ -157,21 +158,21 @@ int run_face_detect_video(const char *model_path, int cameraIndex = 0)
     int frame_id = 0;
 
     face_detect_init(&ctx, model_path);
-    printf("face_detect_init done.\n");
+    log_debug("face_detect_init done.\n");
 
     ret = mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0);
-    if (ret) { printf("mipicamera_init failed\n"); return -1; }
-    printf("mipicamera_init done.\n");
+    if (ret) { log_debug("mipicamera_init failed\n"); return -1; }
+    log_debug("mipicamera_init done.\n");
 
     pbuf = (char *)malloc(IMAGE_SIZE);
-    if (!pbuf) { printf("malloc failed\n"); ret = -1; goto exit_cam; }
+    if (!pbuf) { log_debug("malloc failed\n"); ret = -1; goto exit_cam; }
 
     while (true) {
         ret = mipicamera_getframe(cameraIndex, pbuf);
-        if (ret) { printf("getframe failed\n"); break; }
+        if (ret) { log_debug("getframe failed\n"); break; }
 
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, pbuf);
-        if (frame.empty()) { printf("frame empty\n"); break; }
+        if (frame.empty()) { log_debug("frame empty\n"); break; }
 
         std::vector<det> result;
         struct timeval start, end;
@@ -179,7 +180,7 @@ int run_face_detect_video(const char *model_path, int cameraIndex = 0)
         face_detect_run(ctx, frame, result);
         gettimeofday(&end, NULL);
         float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-        printf("Face Detection time: %f ms, Faces=%d\n", time_use/1000, (int)result.size());
+        log_debug("Face Detection time: %f ms, Faces=%d\n", time_use/1000, (int)result.size());
 
         for (int i = 0; i < (int)result.size(); i++) {
             int x = (int)(result[i].box.x);
@@ -208,7 +209,7 @@ int run_face_detect_video(const char *model_path, int cameraIndex = 0)
                 int h = std::min((int)result[i].box.height, CAMERA_HEIGHT - y); 
                 Mat face_roi = frame(Rect(x, y, w, h)); char face_img_name[128]; 
                 snprintf(face_img_name, sizeof(face_img_name), "face_%05d_%d.jpg", frame_id, i); 
-                imwrite(face_img_name, face_roi); printf("Saved face crop: %s\n", face_img_name); 
+                imwrite(face_img_name, face_roi); log_debug("Saved face crop: %s\n", face_img_name); 
             }
             */
             
@@ -225,8 +226,8 @@ exit_cam:
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("Usage: %s <mode> [model_path]\n", argv[0]);
-        printf("mode: person | face\n");
+        log_debug("Usage: %s <mode> [model_path]\n", argv[0]);
+        log_debug("mode: person | face\n");
         return -1;
     }
 
@@ -240,7 +241,7 @@ int main(int argc, char **argv)
         if (!model_path) model_path = "face_detect.model";
         return run_face_detect_video(model_path, 22);
     } else {
-        printf("Unknown mode: %s\n", mode.c_str());
+        log_debug("Unknown mode: %s\n", mode.c_str());
         return -1;
     }
 }

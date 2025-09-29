@@ -2,6 +2,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/video/tracking.hpp>
 #include <algorithm>
+#include "log.h"
 
 static std::vector<Track> g_tracks;
 static int g_next_id = 1;
@@ -101,7 +102,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets)
             t.active = true;
             tracks.push_back(t);
 
-            printf("New person appeared: ID=%d\n", t.id);
+            log_debug("New person appeared: ID=%d\n", t.id);
         }
     }
 
