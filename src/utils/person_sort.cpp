@@ -100,6 +100,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets)
             t.missed = 0;
             t.active = true;
             tracks.push_back(t);
+
+            printf("New person appeared: ID=%d\n", t.id);
         }
     }
 
