@@ -7,7 +7,7 @@
 #include <iostream>
 #include <ctime>
 
-std::string image_to_base64(const cv::Mat& img, const std::string& ext = ".jpg");
+std::string image_to_base64(const cv::Mat& img, const std::string& ext);
 std::string get_current_time_string();
 std::string build_json(const cv::Mat& img, int id, const std::string& type);
 
