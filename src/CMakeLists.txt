@@ -40,10 +40,14 @@ set(common_root    ${toolkit_root}/common)
 
 include (${algorithm_root}/person_detect/api.cmake)
 include (${algorithm_root}/face_detect/api.cmake)
+include (${common_root}/base64/api.cmake)
+include (${common_root}/json/api.cmake)
 
 ## api头文件路径
 set(api_inc 
     include/
+    ${CJSON_INCLUDE_DIRS}
+    ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${PERSON_DETECT_INCLUDE_DIRS} 
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
@@ -55,6 +59,8 @@ set(api_inc
 ## api源文件路径
 
 file(GLOB api_srcs 
+    ${BASE64_SOURCE_DIRS} 
+    ${CJSON_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
@@ -70,6 +76,8 @@ link_directories(
 )
 ## 依赖的动态库文件
 set(sysLib_list 
+    ${BASE64_LIBS}
+    ${CJSON_LIBS}
     ${PERSON_DETECT_LIBS} 
     ${FACE_DETECT_LIBS} 
     ${OpenCV_LIBS}
