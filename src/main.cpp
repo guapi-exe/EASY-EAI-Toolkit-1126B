@@ -6,6 +6,7 @@
 #include "face_detect.h"
 #include "person_data.h"
 #include "sort_tracker.h"
+#include <unordered_set>
 extern "C" {
 #include "log.h"
 #include "camera.h"
@@ -13,6 +14,7 @@ extern "C" {
 
 using namespace cv;
 using namespace std;
+std::unordered_set<int> captured_ids;
 
 #define CAMERA_WIDTH    1920
 #define CAMERA_HEIGHT   1080
@@ -60,21 +62,21 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
 
     person_detect_init(&person_ctx, person_model_path);
     face_detect_init(&face_ctx, face_model_path);
-    log_debug("person_detect_init & face_detect_init done.\n");
+    log_debug("person_detect_init & face_detect_init done.");
 
     ret = mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0);
-    if (ret) { log_debug("mipicamera_init failed\n"); return -1; }
+    if (ret) { log_debug("mipicamera_init failed"); return -1; }
 
     pbuf = (char *)malloc(IMAGE_SIZE);
-    if (!pbuf) { log_debug("malloc failed\n"); ret = -1; goto exit_cam; }
+    if (!pbuf) { log_debug("malloc failed"); ret = -1; goto exit_cam; }
 
     while (true) {
         frame_id++;
         ret = mipicamera_getframe(cameraIndex, pbuf);
-        if (ret) { log_debug("getframe failed\n"); break; }
+        if (ret) { log_debug("getframe failed"); break; }
 
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, pbuf);
-        if (frame.empty()) { log_debug("frame empty\n"); break; }
+        if (frame.empty()) { log_debug("frame empty"); break; }
 
         detect_result_group_t detect_result_group;
         struct timeval start, end;
@@ -84,7 +86,7 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
 
         gettimeofday(&end, NULL);
         float time_use = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-        log_debug("Person Detection time: %f ms, count=%d\n", time_use / 1000, detect_result_group.count);
+        log_debug("Person Detection time: %f ms, count=%d", time_use / 1000, detect_result_group.count);
 
         std::vector<Detection> dets;
         for (int i=0;i<detect_result_group.count;i++){
@@ -125,13 +127,15 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
             char label[64]; sprintf(label,"ID:%d", t.id);
             putText(frame, label, Point(x1, y1-5), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(255,255,255), 2);
 
-            // **新人员出现时截图并抓取人脸**
-            if (t.age == 1) {
-                log_debug("New person appeared: ID=%d\n", t.id);
+            // **持续对未抓取到人脸的人员进行抓拍**
+            if (captured_ids.find(t.id) == captured_ids.end()) {
+                log_debug("Trying face capture for ID=%d (age=%d)", t.id, t.age);
 
                 Mat person_roi = frame(Rect(x1, y1, w, h)).clone();
                 std::vector<det> face_result;
                 face_detect_run(face_ctx, person_roi, face_result);
+
+                bool face_captured = false;
 
                 if (!face_result.empty()) {
                     int fx = std::max(0, (int)face_result[0].box.x);
@@ -142,28 +146,34 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
                     if (fw > 0 && fh > 0) {
                         Mat face_aligned = person_roi(Rect(fx, fy, fw, fh)).clone();
 
-                        // 模糊检测
                         double fm = compute_focus_measure(face_aligned);
-                        if (fm > 100) { // 阈值可调
+                        if (fm > 100) {
                             char face_name[128];
                             snprintf(face_name, sizeof(face_name), "person_%05d_face_%d.jpg", frame_id, t.id);
                             imwrite(face_name, face_aligned);
-                            log_debug("Saved aligned face: %s\n", face_name);
+                            log_debug("Saved aligned face: %s", face_name);
+
+                            captured_ids.insert(t.id);
+                            face_captured = true;
                         } else {
-                            log_debug("Face too blurry, skip save. FM=%f\n", fm);
+                            log_debug("Face too blurry, skip save. FM=%f", fm);
                         }
                     }
-                } else {
-                    // 无人脸，则保存整个人体ROI
-                    double fm = compute_focus_measure(person_roi);
-                    if (fm > 100) {
-                        char person_name[128];
-                        snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
-                        imwrite(person_name, person_roi);
-                        log_debug("Saved person ROI (no face): %s\n", person_name);
+                }
+
+                if (!face_captured && face_result.empty()) {
+                    if (t.age == 1) { // 只在人刚出现时保存一次人体图
+                        double fm = compute_focus_measure(person_roi);
+                        if (fm > 100) {
+                            char person_name[128];
+                            snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
+                            imwrite(person_name, person_roi);
+                            log_debug("Saved person ROI (no face): %s", person_name);
+                        }
                     }
                 }
             }
+
         }
     }
 
@@ -178,7 +188,7 @@ exit_cam:
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        log_debug("Usage: %s <person_model> <face_model>\n", argv[0]);
+        log_debug("Usage: %s <person_model> <face_model>", argv[0]);
         return -1;
     }
 

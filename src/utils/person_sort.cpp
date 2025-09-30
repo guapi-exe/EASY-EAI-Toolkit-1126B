@@ -149,14 +149,14 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     for (int j=0; j<M; j++) {
         if(det_assigned[j] == -1){
             tracks.push_back(create_track(dets[j], next_id++));
-            log_debug("New person appeared: ID=%d\n", next_id-1);
+            log_debug("New person appeared: ID=%d", next_id-1);
         }
     }
 
     tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed>MAX_MISSED){
-                        log_debug("Person disappeared: ID=%d\n", t.id);
+                        log_debug("Person disappeared: ID=%d", t.id);
                         return true;
                     }
                     return false;

@@ -110,7 +110,7 @@ int match_or_register_person(const uint8_t *rgb, int img_w, int img_h, BOX_RECT 
             memcpy(g_person_list[i].color_hist, hist, sizeof(hist));
             g_person_list[i].last_seen_frame = frame_id;
 
-            printf("New person detected: ID=%d at frame %llu\n",
+            printf("New person detected: ID=%d at frame %llu",
                    g_person_list[i].id, (unsigned long long)frame_id);
             return -1;  // 新人
         }
