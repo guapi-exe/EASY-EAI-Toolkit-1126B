@@ -89,7 +89,7 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
         std::vector<Detection> dets;
         for (int i=0;i<detect_result_group.count;i++){
             detect_result_t& d = detect_result_group.results[i];
-            if (d.prop < 0.4) continue;
+            if (d.prop < 0.6) continue;
             int x1 = std::max(0, d.box.left);
             int y1 = std::max(0, d.box.top);
             int x2 = std::min(CAMERA_WIDTH - 1, d.box.right);
