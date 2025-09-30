@@ -5,6 +5,7 @@
 #include "person_detect.h"
 #include "face_detect.h"
 #include "person_data.h"
+#include "send_data.h"
 #include "sort_tracker.h"
 #include <unordered_set>
 extern "C" {
@@ -149,9 +150,11 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
                         double fm = compute_focus_measure(face_aligned);
                         if (fm > 100) {
                             char face_name[128];
-                            snprintf(face_name, sizeof(face_name), "person_%05d_face_%d.jpg", frame_id, t.id);
-                            imwrite(face_name, face_aligned);
-                            log_debug("Saved aligned face: %s", face_name);
+                            std::string json = build_json(face_aligned, t.id, "face");
+                            log_debug("Captured face JSON: %s", json.c_str());
+                            //snprintf(face_name, sizeof(face_name), "person_%05d_face_%d.jpg", frame_id, t.id);
+                            //imwrite(face_name, face_aligned);
+                            //log_debug("Saved aligned face: %s", face_name);
 
                             captured_ids.insert(t.id);
                             face_captured = true;
@@ -166,9 +169,11 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
                         double fm = compute_focus_measure(person_roi);
                         if (fm > 100) {
                             char person_name[128];
-                            snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
-                            imwrite(person_name, person_roi);
-                            log_debug("Saved person ROI (no face): %s", person_name);
+                            std::string json = build_json(person_roi, t.id, "person");
+                            log_debug("Captured person JSON: %s", json.c_str());
+                            //snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
+                            //imwrite(person_name, person_roi);
+                            //log_debug("Saved person ROI (no face): %s", person_name);
                         }
                     }
                 }
