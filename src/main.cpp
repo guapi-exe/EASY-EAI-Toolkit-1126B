@@ -129,7 +129,7 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
             rectangle(frame, cv::Rect(x1, y1, w, h), cv::Scalar(0, 255, 0), 2);
             char label[64]; sprintf(label,"ID:%d", t.id);
             putText(frame, label, Point(x1, y1-5), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(255,255,255), 2);
-            Mat person_roi
+            Mat person_roi;
             if(captured_person_ids.find(t.id) == captured_person_ids.end() || captured_ids.find(t.id) == captured_ids.end()){
                 person_roi = frame(Rect(x1, y1, w, h)).clone();
             }
