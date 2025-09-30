@@ -16,6 +16,7 @@ extern "C" {
 using namespace cv;
 using namespace std;
 std::unordered_set<int> captured_ids;
+std::unordered_set<int> captured_person_ids;
 
 #define CAMERA_WIDTH    1920
 #define CAMERA_HEIGHT   1080
@@ -109,6 +110,7 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
             det.y1 = y1;
             det.x2 = x2;
             det.y2 = y2;
+            det.prop = d.prop;
 
             dets.push_back(det);
         }
@@ -128,7 +130,25 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
             char label[64]; sprintf(label,"ID:%d", t.id);
             putText(frame, label, Point(x1, y1-5), FONT_HERSHEY_SIMPLEX, 0.8, Scalar(255,255,255), 2);
 
-            // **持续对未抓取到人脸的人员进行抓拍**
+            // **持续对未抓取到的人员进行抓拍**
+            if (captured_person_ids.find(t.id) == captured_person_ids.end()) {
+                double confidence = t.prop;
+                if (confidence > 0.8) { // 置信度判断
+                    double fm = compute_focus_measure(person_roi);
+                    if (fm > 100) {
+                        if (captured_person_ids.find(t.id) == captured_person_ids.end()) {
+                            std::string json = build_json(person_roi, t.id, "person");
+                            log_debug("Captured high-confidence person JSON: %s", json.c_str());
+                            captured_person_ids.insert(t.id);
+                            //snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
+                            //imwrite(person_name, person_roi);
+                            //log_debug("Saved person ROI (no face): %s", person_name);
+                        }
+                    } else {
+                        log_debug("Person too blurry, skip save. FM=%f", fm);
+                    }
+                }
+            }
             if (captured_ids.find(t.id) == captured_ids.end()) {
                 log_debug("Trying face capture for ID=%d (age=%d)", t.id, t.age);
 
@@ -163,22 +183,7 @@ int run_person_detect_video(const char *person_model_path, const char *face_mode
                         }
                     }
                 }
-
-                if (!face_captured && face_result.empty()) {
-                    if (t.age == 1) { // 只在人刚出现时保存一次人体图
-                        double fm = compute_focus_measure(person_roi);
-                        if (fm > 100) {
-                            char person_name[128];
-                            std::string json = build_json(person_roi, t.id, "person");
-                            log_debug("Captured person JSON: %s", json.c_str());
-                            //snprintf(person_name, sizeof(person_name), "person_%05d_id_%d.jpg", frame_id, t.id);
-                            //imwrite(person_name, person_roi);
-                            //log_debug("Saved person ROI (no face): %s", person_name);
-                        }
-                    }
-                }
             }
-
         }
     }
 

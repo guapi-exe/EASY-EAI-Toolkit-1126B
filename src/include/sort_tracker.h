@@ -21,6 +21,7 @@ struct Track {
     ekf_t ekf;    // 使用 tinyEKF
     cv::Mat hist; // 颜色直方图
     cv::Rect2f bbox;
+    float prop;
     int age;
     int missed; // 丢失帧数
     bool active;
