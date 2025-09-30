@@ -83,6 +83,7 @@ static void correct_track(Track& t, const Detection& det) {
 
     t.bbox = cv::Rect2f(det.x1, det.y1, det.x2-det.x1, det.y2-det.y1);
     t.hist = calc_hist(det.roi);
+    t.prop = det.prop;  // 更新置信度
     t.missed = 0;
     t.active = true;
 }
@@ -101,6 +102,7 @@ static Track create_track(const Detection& det, int id) {
 
     t.bbox = cv::Rect2f(det.x1, det.y1, det.x2-det.x1, det.y2-det.y1);
     t.hist = calc_hist(det.roi);
+    t.prop = det.prop;  // 更新置信度
     t.age = 1;
     t.missed = 0;
     t.active = true;
@@ -152,7 +154,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             log_debug("New person appeared: ID=%d", next_id-1);
         }
     }
-
     tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed>MAX_MISSED){
