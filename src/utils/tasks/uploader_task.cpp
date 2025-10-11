@@ -4,7 +4,7 @@ extern "C" {
 }
 #include <curl/curl.h>
 
-UploaderTask::UploaderTask(const std::string& url) : serverUrl(url), running(false) {}
+UploaderTask::UploaderTask(const std::string& eqCode, const std::string& url) : eqCode(eqCode), serverUrl(url), running(false) {}
 
 UploaderTask::~UploaderTask() { stop(); }
 
@@ -73,7 +73,7 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const
 
     // eq-code header
     struct curl_slist *headers = nullptr;
-    headers = curl_slist_append(headers, "eq-code: 111");
+    headers = curl_slist_append(headers, ("eq-code: " + eqCode).c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     curl_easy_setopt(curl, CURLOPT_URL, serverUrl.c_str());
