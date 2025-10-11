@@ -45,7 +45,6 @@ int main() {
         commandManager.executeCommands();
     });
 
-    heartbeat.start();
     CameraTask camera("person_detect.model", "face_detect.model", 22);
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
         uploader.enqueue(img, 1, type);
@@ -53,7 +52,7 @@ int main() {
 
     TaskManager tm;
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
-
+    tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
     tm.startAll();
 
     std::signal(SIGINT, handleSignal);
