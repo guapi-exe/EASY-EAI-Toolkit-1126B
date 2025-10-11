@@ -59,9 +59,7 @@ int main() {
 
     log_info("System started. Press Ctrl+C to stop.");
 
-    while (running) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+    std::this_thread::sleep_for(std::chrono::minutes(10));
 
     log_info("System shutting down...");
     return 0;
