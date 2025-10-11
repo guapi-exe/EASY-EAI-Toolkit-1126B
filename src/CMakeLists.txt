@@ -57,6 +57,7 @@ include (${common_root}/json/api.cmake)
 ## api头文件路径
 set(api_inc 
     include/
+    include/tasks
     ${CJSON_INCLUDE_DIRS}
     ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
@@ -74,6 +75,7 @@ file(GLOB api_srcs
     ${CJSON_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
