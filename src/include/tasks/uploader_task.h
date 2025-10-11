@@ -27,7 +27,7 @@ public:
 private:
     void run();
     std::string uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type);
-
+    std::string eqCode;
     std::string serverUrl;
     std::queue<UploadItem> queue;
     std::mutex mtx;

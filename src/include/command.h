@@ -3,7 +3,7 @@
 #include <functional>
 #include <vector>
 #include <unordered_map>
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 
 struct Command {
     int type;                   // 指令类型

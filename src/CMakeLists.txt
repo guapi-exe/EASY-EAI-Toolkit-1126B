@@ -63,6 +63,7 @@ set(api_inc
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${PERSON_DETECT_INCLUDE_DIRS} 
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/json
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/tinyekf
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
