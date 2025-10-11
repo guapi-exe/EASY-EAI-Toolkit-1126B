@@ -16,7 +16,7 @@ struct UploadItem {
 
 class UploaderTask {
 public:
-    UploaderTask(const std::string& url);
+    UploaderTask(const std::string& eqCode, const std::string& url);
     ~UploaderTask();
 
     void start();
