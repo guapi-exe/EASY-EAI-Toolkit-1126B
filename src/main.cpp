@@ -52,7 +52,7 @@ int main() {
 
     TaskManager tm;
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
-    //tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
+    tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
     tm.startAll();
 
     std::signal(SIGINT, handleSignal);
