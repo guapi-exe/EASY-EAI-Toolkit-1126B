@@ -50,10 +50,4 @@ int main() {
 
     tm.startAll();
 
-    std::this_thread::sleep_for(std::chrono::minutes(10));
-
-    camera.stop();
-    uploader.stop();
-    tm.stopAll();
-    return 0;
 }
