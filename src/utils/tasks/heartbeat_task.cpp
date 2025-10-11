@@ -34,6 +34,12 @@ void HeartbeatTask::updateData(const HeartbeatData& data) {
     hbData = data;
 }
 
+void HeartbeatTask::updateInterval(std::chrono::seconds newInterval) {
+    std::lock_guard<std::mutex> lock(intervalMutex);
+    interval = newInterval;
+    log_info("HeartbeatTask: interval updated to %lld sec", (long long)newInterval.count());
+}
+
 void HeartbeatTask::run() {
     log_info("HeartbeatTask: started, interval=%lld sec", (long long)interval.count());
     while (running) {
@@ -46,16 +52,22 @@ void HeartbeatTask::run() {
             log_error("HeartbeatTask: unknown error");
         }
 
+        std::chrono::seconds currentInterval;
+        {
+            std::lock_guard<std::mutex> lock(intervalMutex);
+            currentInterval = interval;
+        }
+
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - start);
-        if (interval > elapsed)
-            std::this_thread::sleep_for(interval - elapsed);
+        if (currentInterval > elapsed)
+            std::this_thread::sleep_for(currentInterval - elapsed);
     }
     log_info("HeartbeatTask: stopped");
 }
 
 void HeartbeatTask::sendHeartbeat() {
-    if (!running) return;  
+    if (!running) return;
     log_debug("HeartbeatTask: sending heartbeat");
 
     CURL* curl = curl_easy_init();
@@ -71,7 +83,7 @@ void HeartbeatTask::sendHeartbeat() {
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     curl_mime* mime = curl_mime_init(curl);
-    auto addPart = [&](const char* name, const std::string& value){
+    auto addPart = [&](const char* name, const std::string& value) {
         auto part = curl_mime_addpart(mime);
         curl_mime_name(part, name);
         curl_mime_data(part, value.c_str(), CURL_ZERO_TERMINATED);
@@ -86,11 +98,12 @@ void HeartbeatTask::sendHeartbeat() {
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
     std::string response;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
-        auto* resp = reinterpret_cast<std::string*>(userdata);
-        resp->append(ptr, size * nmemb);
-        return size * nmemb;
-    });
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+        +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+            auto* resp = reinterpret_cast<std::string*>(userdata);
+            resp->append(ptr, size * nmemb);
+            return size * nmemb;
+        });
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
 

@@ -20,9 +20,9 @@ void UploaderTask::stop() {
     if (worker.joinable()) worker.join();
 }
 
-void UploaderTask::enqueue(const cv::Mat& img, int cameraNumber, const std::string& type) {
+void UploaderTask::enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path) {
     std::lock_guard<std::mutex> lock(mtx);
-    queue.push({img.clone(), cameraNumber, type, 0});
+    queue.push({img.clone(), cameraNumber, type, path, 0});
     cv.notify_one();
 }
 
@@ -35,16 +35,16 @@ void UploaderTask::run() {
         UploadItem item = queue.front(); queue.pop();
         lock.unlock();
 
-        std::string resp = uploadHttp(item.img, item.cameraNumber, item.type);
+        std::string resp = uploadHttp(item.img, item.cameraNumber, item.type, item.path);
         // 假设返回 "code":0 成功，否则重试
         if (resp != "0" && item.retry < 3) {
             item.retry++;
-            enqueue(item.img, item.cameraNumber, item.type);
+            enqueue(item.img, item.cameraNumber, item.type, item.path);
         }
     }
 }
 
-std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type) {
+std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path) {
     // 使用 libcurl POST 上传 form-data
     CURL *curl = curl_easy_init();
     if (!curl) return "1";
@@ -76,7 +76,7 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const
     headers = curl_slist_append(headers, ("eq-code: " + eqCode).c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-    curl_easy_setopt(curl, CURLOPT_URL, serverUrl.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, (serverUrl + path).c_str());
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, form);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 

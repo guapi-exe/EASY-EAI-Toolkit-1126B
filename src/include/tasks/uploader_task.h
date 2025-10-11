@@ -11,6 +11,7 @@ struct UploadItem {
     cv::Mat img;
     int cameraNumber;
     std::string type;
+    std::string path;
     int retry = 0;
 };
 
@@ -22,11 +23,11 @@ public:
     void start();
     void stop();
 
-    void enqueue(const cv::Mat& img, int cameraNumber, const std::string& type);
+    void enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
 
 private:
     void run();
-    std::string uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type);
+    std::string uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
     std::string eqCode;
     std::string serverUrl;
     std::queue<UploadItem> queue;

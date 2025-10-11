@@ -29,10 +29,12 @@ public:
 
     void setCallback(Callback cb);
     void updateData(const HeartbeatData& data);
+    void updateInterval(std::chrono::seconds newInterval);
 
 private:
     std::string eqCode;
     std::string url;
+    std::mutex intervalMutex;
     std::chrono::seconds interval;
     std::atomic<bool> running;
     std::thread worker;

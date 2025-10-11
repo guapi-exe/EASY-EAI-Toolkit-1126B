@@ -20,6 +20,7 @@ public:
     void start();
     void stop();
     void setUploadCallback(UploadCallback cb);
+    void captureSnapshot();
 
 private:
     void run();

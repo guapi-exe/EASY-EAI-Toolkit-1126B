@@ -20,7 +20,7 @@ int main() {
     hbData.isNorth = 1;
     hbData.isEast = 1;
 
-    UploaderTask uploader("111", "http://101.200.56.225:11100/receive/image/auto");
+    UploaderTask uploader("111", "http://101.200.56.225:11100");
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
     uploader.start();
@@ -28,12 +28,14 @@ int main() {
         switch(cmd.type) {
             case 1: // 主动抓拍
                 log_debug("CommandManager: Capture command received, index=%s", cmd.content["active"].get<int>());
+                camera.captureSnapshot();
                 break;
             case 2: // 修改服务端地址
                 log_debug("CommandManager: Set server URL to %s", cmd.content["ip"].get<std::string>().c_str());
                 break;
             case 3: // 修改发送间隔
                 log_debug("CommandManager: Set heartbeat interval to %d seconds", cmd.content["interval"].get<int>());
+                heartbeat.updateInterval(std::chrono::seconds(cmd.content["interval"].get<int>()));
                 break;
             default:
                 break;
@@ -47,7 +49,12 @@ int main() {
 
     CameraTask camera("person_detect.model", "face_detect.model", 22);
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
-        uploader.enqueue(img, 1, type);
+        if (type == "all")
+        {
+            uploader.enqueue(img, 1, type, "/receive/image/manual");
+        }else{
+            uploader.enqueue(img, 1, type, "/receive/image/auto");
+        }
     });
 
     TaskManager tm;

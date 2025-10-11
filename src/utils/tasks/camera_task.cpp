@@ -76,6 +76,26 @@ void CameraTask::run() {
     face_detect_release(faceCtx);
 }
 
+void CameraTask::captureSnapshot() {
+    std::vector<unsigned char> buffer(IMAGE_SIZE);
+    if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
+        cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        if (!frame.empty()) {
+            if (uploadCallback) {
+                uploadCallback(frame.clone(), 0, "all");
+                log_info("CameraTask: snapshot uploaded");
+            }
+        } else {
+            log_error("CameraTask: snapshot empty frame");
+        }
+    } else {
+        log_error("CameraTask: snapshot failed to get frame");
+    }
+
+    mipicamera_exit(cameraIndex);
+}
+
+
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, frame, &detect_result_group);
