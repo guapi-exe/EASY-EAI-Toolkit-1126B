@@ -6,7 +6,6 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <atomic>
-#include "log.h"
 
 struct UploadItem {
     cv::Mat img;

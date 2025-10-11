@@ -1,5 +1,7 @@
 #include "uploader_task.h"
+extern "C" {
 #include "log.h"
+}
 #include <curl/curl.h>
 
 UploaderTask::UploaderTask(const std::string& url) : serverUrl(url), running(false) {}

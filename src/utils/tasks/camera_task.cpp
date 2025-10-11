@@ -2,8 +2,10 @@
 #include "person_detect.h"
 #include "face_detect.h"
 #include "sort_tracker.h"
+extern "C" {
 #include "log.h"
 #include "camera.h"
+}
 
 using namespace cv;
 using namespace std;
