@@ -13,6 +13,17 @@ if((NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aa
     include ($ENV{HOME}/configs/cross.cmake)
 endif()
 
+find_package(CURL QUIET)
+
+if (CURL_FOUND)
+    message(STATUS "Found system libcurl: ${CURL_LIBRARIES}")
+else()
+    message(WARNING "CURL not found automatically, using manual include/lib paths")
+    set(CURL_INCLUDE_DIRS ${CMAKE_SYSROOT}/usr/include)
+    set(CURL_LIBRARIES ${CMAKE_SYSROOT}/usr/lib/libcurl.so)
+endif()
+
+include_directories(${CURL_INCLUDE_DIRS})
 #若要使用${CMAKE_SYSROOT}变量，project必须要在set(CMAKE_TOOLCHAIN_FILE "${HOST_DIR}/share/buildroot/toolchainfile.cmake")后面设置
 project(test_1)
 add_definitions(-Wall -Wpointer-arith)
@@ -93,5 +104,5 @@ add_definitions(-DLOG_USE_COLOR)
 #--------------------------
 set(project_name main)
 add_executable(${project_name} main.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${project_name} ${sysLib_list} )
+target_link_libraries(${project_name} ${sysLib_list} ${CURL_LIBRARIES})
 target_include_directories(${project_name} PRIVATE ${api_inc})
