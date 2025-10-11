@@ -23,8 +23,8 @@ public:
 private:
     void run();
     double computeFocusMeasure(const cv::Mat& img);
-    void processFrame(const cv::Mat& frame);
-
+    void processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx);
+    double computeFocusMeasure(const Mat& img);
     std::string personModelPath;
     std::string faceModelPath;
     int cameraIndex;
