@@ -6,7 +6,7 @@ int main() {
     UploaderTask uploader("http://101.200.56.225:11100/receive/image/auto");
     uploader.start();
 
-    CameraTask camera("person_model.model", "face_model.model", 22);
+    CameraTask camera("person_detect.model", "face_detect.model", 22);
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
         uploader.enqueue(img, 1, type);
     });
