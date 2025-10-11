@@ -5,7 +5,6 @@
 #include "command_manager.h"
 
 int main() {
-
     HeartbeatData hbData; //虚拟信息
     hbData.time = "1696000000";
     hbData.power = "100";
@@ -50,4 +49,15 @@ int main() {
 
     tm.startAll();
 
+    std::atomic<bool> running(true);
+    signal(SIGINT, [](int){ running = false; });
+
+    log_info("System started. Press Ctrl+C to stop.");
+
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    log_info("System shutting down...");
+    return 0;
 }
