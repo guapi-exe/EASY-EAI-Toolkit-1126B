@@ -51,18 +51,21 @@ void CameraTask::run() {
         return;
     }
 
-    vector<unsigned char> buffer(IMAGE_SIZE);
+    std::vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
-        if (mipicamera_getframe(cameraIndex, buffer.data()) != 0) continue;
-        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
+
+        cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty()) continue;
-        processFrame(frame);
+
+        processFrame(frame);  
     }
 
     mipicamera_exit(cameraIndex);
     person_detect_release(personCtx);
     face_detect_release(faceCtx);
 }
+
 
 void CameraTask::processFrame(const Mat& frame) {
     detect_result_group_t detect_result_group;
