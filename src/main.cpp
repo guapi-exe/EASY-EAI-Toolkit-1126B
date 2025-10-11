@@ -24,6 +24,23 @@ int main() {
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
     uploader.start();
+    
+    heartbeat.updateData(hbData);
+    heartbeat.setCallback([&](const std::string& respJson){
+        commandManager.parseServerResponse(respJson);
+        commandManager.executeCommands();
+    });
+
+    CameraTask camera("person_detect.model", "face_detect.model", 22);
+    camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
+        if (type == "all")
+        {
+            uploader.enqueue(img, 1, type, "/receive/image/manual");
+        }else{
+            uploader.enqueue(img, 1, type, "/receive/image/auto");
+        }
+    });
+
     commandManager.setCallback([&](const Command& cmd){
         switch(cmd.type) {
             case 1: // 主动抓拍
@@ -41,22 +58,7 @@ int main() {
                 break;
         }
     });
-    heartbeat.updateData(hbData);
-    heartbeat.setCallback([&](const std::string& respJson){
-        commandManager.parseServerResponse(respJson);
-        commandManager.executeCommands();
-    });
-
-    CameraTask camera("person_detect.model", "face_detect.model", 22);
-    camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
-        if (type == "all")
-        {
-            uploader.enqueue(img, 1, type, "/receive/image/manual");
-        }else{
-            uploader.enqueue(img, 1, type, "/receive/image/auto");
-        }
-    });
-
+    
     TaskManager tm;
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
     tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
