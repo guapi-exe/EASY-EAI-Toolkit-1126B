@@ -8,6 +8,9 @@
 #include <memory>
 #include <exception>
 #include <unistd.h>
+extern "C" {
+#include "log.h"
+}
 
 /**
  * @brief 通用任务管理器
