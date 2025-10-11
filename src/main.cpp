@@ -3,6 +3,13 @@
 #include "uploader_task.h"
 #include "heartbeat_task.h"
 #include "command_manager.h"
+#include <csignal> 
+
+std::atomic<bool> running(true);
+
+void handleSignal(int) {
+    running = false;
+}
 
 int main() {
     HeartbeatData hbData; //虚拟信息
@@ -49,8 +56,7 @@ int main() {
 
     tm.startAll();
 
-    std::atomic<bool> running(true);
-    signal(SIGINT, [](int){ running = false; });
+    std::signal(SIGINT, handleSignal);
 
     log_info("System started. Press Ctrl+C to stop.");
 
