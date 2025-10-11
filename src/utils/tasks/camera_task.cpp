@@ -126,13 +126,20 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         vector<det> face_result;
         face_detect_run(faceCtx, person_roi, face_result);
 
-        // 只有人形和人脸都存在时才上传
         if (!face_result.empty() && computeFocusMeasure(person_roi) > 100) {
-            Rect fbox = cv::Rect(face_result[0].box) & Rect(0, 0, person_roi.cols, person_roi.rows);
+            // 原始人脸框
+            Rect fbox = cv::Rect(face_result[0].box);
+
+            int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0); // 左右各扩大一半
+            int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0); // 上下各扩大一半
+            fbox.x = std::max(0, fbox.x - w_expand);
+            fbox.y = std::max(0, fbox.y - h_expand);
+            fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
+            fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+
             if (fbox.width > 0 && fbox.height > 0) {
                 Mat face_aligned = person_roi(fbox).clone();
                 if (computeFocusMeasure(face_aligned) > 100) {
-                    // 同时上传人形和人脸
                     if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
                         capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
                         if (uploadCallback) {
