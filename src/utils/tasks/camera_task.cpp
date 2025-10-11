@@ -117,27 +117,29 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     }
 
     vector<Track> tracks = sort_update(dets);
+
     for (auto& t : tracks) {
         Rect bbox((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
         if (bbox.width <=0 || bbox.height <=0) continue;
         Mat person_roi = frame(bbox).clone();
 
-        // 捕获人形
-        if (capturedPersonIds.find(t.id) == capturedPersonIds.end() && computeFocusMeasure(person_roi) > 100) {
-            if (uploadCallback) uploadCallback(person_roi, t.id, "person");
-            capturedPersonIds.insert(t.id);
-        }
+        vector<det> face_result;
+        face_detect_run(faceCtx, person_roi, face_result);
 
-        // 捕获人脸
-        if (capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
-            vector<det> face_result;
-            face_detect_run(faceCtx, person_roi, face_result);
-            if (!face_result.empty()) {
-                Rect fbox = cv::Rect(face_result[0].box) & Rect(0, 0, person_roi.cols, person_roi.rows);
-                if (fbox.width > 0 && fbox.height > 0) {
-                    Mat face_aligned = person_roi(fbox).clone();
-                    if (computeFocusMeasure(face_aligned) > 100) {
-                        if (uploadCallback) uploadCallback(face_aligned, t.id, "face");
+        // 只有人形和人脸都存在时才上传
+        if (!face_result.empty() && computeFocusMeasure(person_roi) > 100) {
+            Rect fbox = cv::Rect(face_result[0].box) & Rect(0, 0, person_roi.cols, person_roi.rows);
+            if (fbox.width > 0 && fbox.height > 0) {
+                Mat face_aligned = person_roi(fbox).clone();
+                if (computeFocusMeasure(face_aligned) > 100) {
+                    // 同时上传人形和人脸
+                    if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
+                        capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
+                        if (uploadCallback) {
+                            uploadCallback(person_roi, t.id, "person");
+                            uploadCallback(face_aligned, t.id, "face");
+                        }
+                        capturedPersonIds.insert(t.id);
                         capturedFaceIds.insert(t.id);
                     }
                 }
