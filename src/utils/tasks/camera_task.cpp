@@ -35,6 +35,7 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
     uploadCallback = cb;
 }
 
+// -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
     Mat gray, lap;
     cvtColor(img, gray, COLOR_BGR2GRAY);
@@ -44,23 +45,30 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
 
 void CameraTask::run() {
     rknn_context personCtx, faceCtx;
-    person_detect_init(&personCtx, personModelPath.c_str());
-    face_detect_init(&faceCtx, faceModelPath.c_str());
+    if (person_detect_init(&personCtx, personModelPath.c_str()) != 0) {
+        log_debug("CameraTask: person_detect_init failed");
+        return;
+    }
+    if (face_detect_init(&faceCtx, faceModelPath.c_str()) != 0) {
+        log_debug("CameraTask: face_detect_init failed");
+        person_detect_release(personCtx);
+        return;
+    }
     sort_init();
 
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
+        person_detect_release(personCtx);
+        face_detect_release(faceCtx);
         return;
     }
 
-    std::vector<unsigned char> buffer(IMAGE_SIZE);
+    vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
-
-        cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty()) continue;
-
-        processFrame(frame);  
+        processFrame(frame, personCtx, faceCtx);
     }
 
     mipicamera_exit(cameraIndex);
@@ -68,10 +76,9 @@ void CameraTask::run() {
     face_detect_release(faceCtx);
 }
 
-
-void CameraTask::processFrame(const Mat& frame) {
+void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
     detect_result_group_t detect_result_group;
-    person_detect_run(0, frame, &detect_result_group);
+    person_detect_run(personCtx, frame, &detect_result_group);
 
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
@@ -81,14 +88,18 @@ void CameraTask::processFrame(const Mat& frame) {
                  min(CAMERA_WIDTH-1,d.box.right)-max(0,d.box.left),
                  min(CAMERA_HEIGHT-1,d.box.bottom)-max(0,d.box.top));
         if (roi.width <=0 || roi.height <=0) continue;
-        Detection det; det.roi = frame(roi).clone(); det.x1=roi.x; det.y1=roi.y; det.x2=roi.x+roi.width; det.y2=roi.y+roi.height; det.prop=d.prop;
+        Detection det; 
+        det.roi = frame(roi).clone(); 
+        det.x1 = roi.x; det.y1 = roi.y; 
+        det.x2 = roi.x + roi.width; det.y2 = roi.y + roi.height; 
+        det.prop = d.prop;
         dets.push_back(det);
     }
 
     vector<Track> tracks = sort_update(dets);
     for (auto& t : tracks) {
         Rect bbox((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
-        if (bbox.width<=0 || bbox.height<=0) continue;
+        if (bbox.width <=0 || bbox.height <=0) continue;
         Mat person_roi = frame(bbox).clone();
 
         // 捕获人形
@@ -100,12 +111,12 @@ void CameraTask::processFrame(const Mat& frame) {
         // 捕获人脸
         if (capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
             vector<det> face_result;
-            face_detect_run(0, person_roi, face_result);
+            face_detect_run(faceCtx, person_roi, face_result);
             if (!face_result.empty()) {
-                cv::Rect fbox = cv::Rect(face_result[0].box) & cv::Rect(0, 0, person_roi.cols, person_roi.rows);
-                if (fbox.width>0 && fbox.height>0) {
+                Rect fbox = cv::Rect(face_result[0].box) & Rect(0, 0, person_roi.cols, person_roi.rows);
+                if (fbox.width > 0 && fbox.height > 0) {
                     Mat face_aligned = person_roi(fbox).clone();
-                    if (computeFocusMeasure(face_aligned)>100) {
+                    if (computeFocusMeasure(face_aligned) > 100) {
                         if (uploadCallback) uploadCallback(face_aligned, t.id, "face");
                         capturedFaceIds.insert(t.id);
                     }
