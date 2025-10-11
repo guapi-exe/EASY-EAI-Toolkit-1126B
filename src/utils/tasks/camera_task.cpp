@@ -100,7 +100,7 @@ void CameraTask::processFrame(const Mat& frame) {
             vector<det> face_result;
             face_detect_run(0, person_roi, face_result);
             if (!face_result.empty()) {
-                Rect fbox = face_result[0].box & Rect(0,0,person_roi.cols,person_roi.rows);
+                cv::Rect fbox = cv::Rect(face_result[0].box) & cv::Rect(0, 0, person_roi.cols, person_roi.rows);
                 if (fbox.width>0 && fbox.height>0) {
                     Mat face_aligned = person_roi(fbox).clone();
                     if (computeFocusMeasure(face_aligned)>100) {
