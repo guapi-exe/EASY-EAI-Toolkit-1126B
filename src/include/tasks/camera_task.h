@@ -25,7 +25,6 @@ private:
     void run();
     double computeFocusMeasure(const cv::Mat& img);
     void processFrame(const cv::Mat& frame, rknn_context personCtx, rknn_context faceCtx);
-    double computeFocusMeasure(const cv::Mat& img);
     std::string personModelPath;
     std::string faceModelPath;
     int cameraIndex;
