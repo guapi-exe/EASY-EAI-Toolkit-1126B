@@ -3,6 +3,7 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <chrono>
 
 struct HeartbeatData {

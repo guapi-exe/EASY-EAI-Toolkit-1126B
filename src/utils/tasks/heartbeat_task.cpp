@@ -1,5 +1,6 @@
 #include "heartbeat_task.h"
 #include <curl/curl.h>
+#include <mutex>
 #include <iostream>
 extern "C" {
 #include "log.h"
