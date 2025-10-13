@@ -4,7 +4,8 @@
 #include "heartbeat_task.h"
 #include "command_manager.h"
 #include <csignal> 
-#include <conio.h> 
+#include <unistd.h>
+#include <sys/select.h>
 
 std::atomic<bool> running(true);
 
@@ -71,9 +72,18 @@ int main() {
 
     while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (_kbhit()) {
-            char ch = _getch();
-            if (ch == 'c') { // 按下 c 键触发抓拍
+
+        fd_set set;
+        struct timeval timeout;
+        FD_ZERO(&set);
+        FD_SET(STDIN_FILENO, &set);
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 0;
+        int rv = select(STDIN_FILENO + 1, &set, NULL, NULL, &timeout);
+        if (rv > 0) {
+            char ch;
+            read(STDIN_FILENO, &ch, 1);
+            if (ch == 'c') {
                 camera.captureSnapshot();
                 log_info("Debug: 手动调用 camera.captureSnapshot()");
             }
