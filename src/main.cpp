@@ -4,6 +4,7 @@
 #include "heartbeat_task.h"
 #include "command_manager.h"
 #include <csignal> 
+#include <conio.h> 
 
 std::atomic<bool> running(true);
 
@@ -70,6 +71,13 @@ int main() {
 
     while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (_kbhit()) {
+            char ch = _getch();
+            if (ch == 'c') { // 按下 c 键触发抓拍
+                camera.captureSnapshot();
+                log_info("Debug: 手动调用 camera.captureSnapshot()");
+            }
+        }
     }
 
     log_info("System shutting down...");
