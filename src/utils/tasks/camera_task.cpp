@@ -77,6 +77,10 @@ void CameraTask::run() {
 }
 
 void CameraTask::captureSnapshot() {
+    if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
+        log_debug("CameraTask: Camera init failed");
+        return;
+    }
     std::vector<unsigned char> buffer(IMAGE_SIZE);
     if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
