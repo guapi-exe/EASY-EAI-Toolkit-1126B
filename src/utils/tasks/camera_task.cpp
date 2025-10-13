@@ -77,10 +77,6 @@ void CameraTask::run() {
 }
 
 void CameraTask::captureSnapshot() {
-    if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
-        log_debug("CameraTask: Camera init failed");
-        return;
-    }
     std::vector<unsigned char> buffer(IMAGE_SIZE);
     if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
@@ -95,8 +91,6 @@ void CameraTask::captureSnapshot() {
     } else {
         log_error("CameraTask: snapshot failed to get frame");
     }
-
-    mipicamera_exit(cameraIndex);
 }
 
 
@@ -147,6 +141,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
                         capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
                         if (uploadCallback) {
+                            uploadCallback(frame.clone(), 0, "all");//test
                             uploadCallback(person_roi, t.id, "person");
                             uploadCallback(face_aligned, t.id, "face");
                         }
