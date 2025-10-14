@@ -1,3 +1,4 @@
+#include "serial_task.h"
 #include <thread>
 #include <atomic>
 #include <string>
