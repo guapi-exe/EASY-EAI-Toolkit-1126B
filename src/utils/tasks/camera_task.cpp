@@ -149,7 +149,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
                         capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
                         if (uploadCallback) {
-                            //uploadCallback(frame.clone(), 0, "all");//test
+                            uploadCallback(frame.clone(), 0, "all");//test
                             uploadCallback(person_roi, t.id, "person");
                             uploadCallback(face_aligned, t.id, "face");
                         }
