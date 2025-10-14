@@ -23,7 +23,7 @@ public:
 
     void send(const std::string& data) {
         if (running_) {
-            UART_Send(fd_, data.c_str(), data.size());
+            UART_Send(fd_, const_cast<char*>(data.c_str()), data.size());
         }
     }
 
