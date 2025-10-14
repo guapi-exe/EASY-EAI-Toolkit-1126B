@@ -10,8 +10,8 @@ extern "C" {
 using namespace cv;
 using namespace std;
 
-#define CAMERA_WIDTH    2560
-#define CAMERA_HEIGHT   1920
+#define CAMERA_WIDTH    1920
+#define CAMERA_HEIGHT   1080
 #define IMGRATIO        3
 #define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
 
@@ -149,7 +149,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
                         capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
                         if (uploadCallback) {
-                            uploadCallback(frame.clone(), 0, "all");//test
+                            //uploadCallback(frame.clone(), 0, "all");//test
                             uploadCallback(person_roi, t.id, "person");
                             uploadCallback(face_aligned, t.id, "face");
                         }

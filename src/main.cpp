@@ -1,6 +1,7 @@
 #include "task_manager.h"
 #include "camera_task.h"
 #include "uploader_task.h"
+#include "serial_task.h"
 #include "heartbeat_task.h"
 #include "command_manager.h"
 #include <csignal> 
@@ -25,6 +26,7 @@ int main() {
     UploaderTask uploader("111", "http://101.200.56.225:11100");
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
+    SerialTask serial("/dev/ttyS2", 115200);
     uploader.start();
     
     heartbeat.updateData(hbData);
@@ -64,6 +66,7 @@ int main() {
     TaskManager tm;
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
     tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
+    tm.addTask("SerialTask", [&](){ serial.start(); }, 10, std::chrono::seconds(1), true);
     tm.startAll();
 
     std::signal(SIGINT, handleSignal);
@@ -80,12 +83,16 @@ int main() {
         timeout.tv_sec = 0;
         timeout.tv_usec = 0;
         int rv = select(STDIN_FILENO + 1, &set, NULL, NULL, &timeout);
-        if (rv > 0) {
-            char ch;
-            read(STDIN_FILENO, &ch, 1);
-            if (ch == 'c') {
-                camera.captureSnapshot();
-                log_info("Debug: 手动调用 camera.captureSnapshot()");
+
+        if (rv > 0 && FD_ISSET(STDIN_FILENO, &set)) {
+            char buf[256] = {0};
+            ssize_t len = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+            if (len > 0) {
+                buf[len] = '\0';
+                log_info("Main: Received from stdin: %s", buf);
+                // 通过串口发送
+                UART_Send(serial.fd_, buf, len);
+                log_info("Main: Sent to serial: %s", buf);
             }
         }
     }

@@ -67,6 +67,7 @@ set(api_inc
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/tinyekf
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma
+    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/uart
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
     )
 ## api源文件路径
@@ -79,6 +80,7 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/uart/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
 )
