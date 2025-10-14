@@ -37,7 +37,7 @@ int main() {
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
         if (type == "all")
         {
-            uploader.enqueue(img, 1, type, "/receive/image/manual");
+            uploader.enqueue(img, 1, type, "/receive/image/auto");
         }else{
             uploader.enqueue(img, 1, type, "/receive/image/auto");
         }
