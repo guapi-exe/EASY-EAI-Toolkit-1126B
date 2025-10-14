@@ -6,8 +6,8 @@
 #include <unistd.h>
 extern "C" {
 #include "log.h"
-}
 #include "uart.h"
+}
 
 class SerialTask {
 public:
