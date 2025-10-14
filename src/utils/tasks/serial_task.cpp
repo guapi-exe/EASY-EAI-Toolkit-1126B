@@ -21,6 +21,12 @@ public:
         worker_ = std::thread(&SerialTask::run, this);
     }
 
+    void send(const std::string& data) {
+        if (running_) {
+            UART_Send(fd_, data.c_str(), data.size());
+        }
+    }
+
     void stop() {
         running_ = false;
         if (worker_.joinable()) worker_.join();

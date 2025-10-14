@@ -91,7 +91,7 @@ int main() {
                 buf[len] = '\0';
                 log_info("Main: Received from stdin: %s", buf);
                 // 通过串口发送
-                UART_Send(serial.fd_, buf, len);
+                serial.send(buf);
                 log_info("Main: Sent to serial: %s", buf);
             }
         }

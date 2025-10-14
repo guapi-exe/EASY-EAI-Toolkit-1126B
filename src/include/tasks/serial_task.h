@@ -10,7 +10,8 @@ public:
 
     void start();
     void stop();
-
+    void send(const std::string& data);
+    
 private:
     void run();
 
