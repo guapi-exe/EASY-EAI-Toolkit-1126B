@@ -10,8 +10,8 @@ extern "C" {
 using namespace cv;
 using namespace std;
 
-#define CAMERA_WIDTH    3840
-#define CAMERA_HEIGHT   2160
+#define CAMERA_WIDTH    1920
+#define CAMERA_HEIGHT   1080
 #define IMGRATIO        3
 #define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
 
@@ -56,7 +56,15 @@ void CameraTask::run() {
     }
     sort_init();
 
+    /*
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
+        log_debug("CameraTask: Camera init failed");
+        person_detect_release(personCtx);
+        face_detect_release(faceCtx);
+        return;
+    }
+    */
+    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
         face_detect_release(faceCtx);
@@ -65,7 +73,7 @@ void CameraTask::run() {
 
     vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
-        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
+        if (usbcamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty()) continue;
         processFrame(frame, personCtx, faceCtx);
@@ -78,7 +86,7 @@ void CameraTask::run() {
 
 void CameraTask::captureSnapshot() {
     std::vector<unsigned char> buffer(IMAGE_SIZE);
-    if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
+    if (usbcamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (!frame.empty()) {
             if (uploadCallback) {
