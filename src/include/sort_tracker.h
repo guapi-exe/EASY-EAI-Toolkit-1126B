@@ -28,6 +28,7 @@ struct Track {
     int hits;   // 命中次数，用于稳定性评估  
     bool active;
     bool confirmed; // 是否已确认的track
+    std::vector<float> bbox_history; // 检测框面积历史
 };
 
 void sort_init();

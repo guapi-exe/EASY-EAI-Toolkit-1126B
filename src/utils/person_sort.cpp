@@ -168,6 +168,12 @@ static void correct_track(Track& t, const Detection& det) {
     if (t.hits >= 3) {
         t.confirmed = true;
     }
+
+    // 记录检测框面积历史
+    float area = t.bbox.width * t.bbox.height;
+    t.bbox_history.push_back(area);
+    // 只保留最近20帧
+    if (t.bbox_history.size() > 20) t.bbox_history.erase(t.bbox_history.begin());
 }
 
 //-----------------新建Track-----------------

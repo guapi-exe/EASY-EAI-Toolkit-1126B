@@ -109,7 +109,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
-        if (d.prop < 0.6) continue;
+        if (d.prop < 0.8) continue;
         Rect roi(max(0,d.box.left), max(0,d.box.top),
                  min(CAMERA_WIDTH-1,d.box.right)-max(0,d.box.left),
                  min(CAMERA_HEIGHT-1,d.box.bottom)-max(0,d.box.top));
@@ -157,6 +157,20 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         capturedFaceIds.insert(t.id);
                     }
                 }
+            }
+        }
+
+        if (t.bbox_history.size() >= 5) {
+            // 取最近5帧面积，计算均值变化
+            float area_now = t.bbox_history.back();
+            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
+            float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
+            if (ratio > 0.1f) {
+                log_info("Track %d 正在接近摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
+            } else if (ratio < -0.1f) {
+                log_info("Track %d 正在远离摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
+            } else {
+                log_info("Track %d 距离变化不明显", t.id);
             }
         }
     }
