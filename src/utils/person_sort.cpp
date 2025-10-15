@@ -196,6 +196,10 @@ static Track create_track(const Detection& det, int id) {
     t.hits = 1;  // 初始命中次数
     t.active = true;
     t.confirmed = false;  // 需要几帧确认
+    t.is_approaching = false;
+    t.best_area = 0.0f;
+    t.best_clarity = 0.0;
+    t.has_captured = false;
     return t;
 }
 

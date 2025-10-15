@@ -29,6 +29,10 @@ struct Track {
     bool active;
     bool confirmed; // 是否已确认的track
     std::vector<float> bbox_history; // 检测框面积历史
+    bool is_approaching; // 是否正在接近摄像机
+    float best_area; // 最佳拍照时的面积
+    double best_clarity; // 最佳拍照时的清晰度
+    bool has_captured; // 是否已经拍照
 };
 
 void sort_init();

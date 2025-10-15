@@ -132,45 +132,77 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         vector<det> face_result;
         face_detect_run(faceCtx, person_roi, face_result);
 
-        if (!face_result.empty() && computeFocusMeasure(person_roi) > 100) {
-            // 原始人脸框
-            Rect fbox = cv::Rect(face_result[0].box);
-
-            int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0); // 左右各扩大一半
-            int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0); // 上下各扩大一半
-            fbox.x = std::max(0, fbox.x - w_expand);
-            fbox.y = std::max(0, fbox.y - h_expand);
-            fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-            fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
-
-            if (fbox.width > 0 && fbox.height > 0) {
-                Mat face_aligned = person_roi(fbox).clone();
-                if (computeFocusMeasure(face_aligned) > 100) {
-                    if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
-                        capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
-                        if (uploadCallback) {
-                            //uploadCallback(frame.clone(), 0, "all");//test
-                            uploadCallback(person_roi, t.id, "person");
-                            uploadCallback(face_aligned, t.id, "face");
-                        }
-                        capturedPersonIds.insert(t.id);
-                        capturedFaceIds.insert(t.id);
-                    }
-                }
-            }
-        }
-
+        // ----------- 智能拍照逻辑：只在接近摄像机时的最佳位置拍照 -----------
         if (t.bbox_history.size() >= 5) {
-            // 取最近5帧面积，计算均值变化
             float area_now = t.bbox_history.back();
             float area_prev = t.bbox_history[t.bbox_history.size() - 5];
             float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
+            
+            // 判断是否正在接近摄像机
             if (ratio > 0.1f) {
+                t.is_approaching = true;
                 log_info("Track %d 正在接近摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
             } else if (ratio < -0.1f) {
+                t.is_approaching = false;
                 log_info("Track %d 正在远离摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
-            } else {
-                log_info("Track %d 距离变化不明显", t.id);
+            }
+        }
+
+        // 只在人物接近摄像机且有人脸检测到的情况下考虑拍照
+        if (t.is_approaching && !t.has_captured && !face_result.empty()) {
+            double current_clarity = computeFocusMeasure(person_roi);
+            float current_area = t.bbox.width * t.bbox.height;
+            
+            // 计算适中的距离分数 (面积在合理范围内得分更高)
+            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.05f; // 期望面积约占画面5%
+            float area_score = 1.0f / (1.0f + abs(current_area - ideal_area) / ideal_area);
+            
+            // 综合评分：清晰度权重70%，距离适中权重30%
+            double current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
+            
+            // 如果当前状态比之前记录的最佳状态更好，更新最佳状态
+            if (current_score > t.best_clarity && current_clarity > 100) {
+                t.best_clarity = current_score;
+                t.best_area = current_area;
+                log_info("Track %d 更新最佳拍照状态 (清晰度: %.2f, 面积: %.0f, 综合评分: %.2f)", 
+                         t.id, current_clarity, current_area, current_score);
+            }
+            
+            // 如果检测到人物开始远离（面积开始缩小），触发拍照
+            if (t.bbox_history.size() >= 8) {
+                float recent_area = t.bbox_history[t.bbox_history.size() - 3];
+                if (current_area < recent_area * 0.95f && t.best_clarity > 0) {
+                    // 人物开始远离，在最佳位置拍照
+                    if (current_clarity > 100) {
+                        // 原始人脸框
+                        Rect fbox = cv::Rect(face_result[0].box);
+
+                        int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
+                        int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
+                        fbox.x = std::max(0, fbox.x - w_expand);
+                        fbox.y = std::max(0, fbox.y - h_expand);
+                        fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
+                        fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+
+                        if (fbox.width > 0 && fbox.height > 0) {
+                            Mat face_aligned = person_roi(fbox).clone();
+                            if (computeFocusMeasure(face_aligned) > 100) {
+                                if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
+                                    capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
+                                    if (uploadCallback) {
+                                        uploadCallback(person_roi, t.id, "person");
+                                        uploadCallback(face_aligned, t.id, "face");
+                                        log_info("Track %d 在最佳位置拍照成功 (清晰度: %.2f, 面积: %.0f)", 
+                                                 t.id, current_clarity, current_area);
+                                    }
+                                    capturedPersonIds.insert(t.id);
+                                    capturedFaceIds.insert(t.id);
+                                    t.has_captured = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
