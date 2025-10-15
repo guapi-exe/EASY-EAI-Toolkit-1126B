@@ -1,11 +1,12 @@
 #include "sort_tracker.h"
 #include <vector>
+#include "main.h"
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cstdio>
 #include "tinyekf.h"
 #include <functional>
-#include <set>
+#include <unordered_set>
 extern "C" {
 #include "log.h"
 }
@@ -21,11 +22,11 @@ void sort_init() {
 
 // 添加上传回调函数指针
 static std::function<void(const cv::Mat&, int, const std::string&)> upload_callback = nullptr;
-static std::set<int>* captured_person_ids = nullptr;
-static std::set<int>* captured_face_ids = nullptr;
+static std::unordered_set<int>* captured_person_ids = nullptr;
+static std::unordered_set<int>* captured_face_ids = nullptr;
 
 void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
-                        std::set<int>* person_ids, std::set<int>* face_ids) {
+                        std::unordered_set<int>* person_ids, std::unordered_set<int>* face_ids) {
     upload_callback = callback;
     captured_person_ids = person_ids;
     captured_face_ids = face_ids;
@@ -313,10 +314,10 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                             captured_face_ids->find(t.id) == captured_face_ids->end()) {
                             
                             double best_score = -1;
-                            int best_index = -1;
+                            size_t best_index = SIZE_MAX;
                             
                             // 找到分数最高且有人脸的帧
-                            for (int i = 0; i < t.frame_candidates.size(); i++) {
+                            for (size_t i = 0; i < t.frame_candidates.size(); i++) {
                                 const auto& frame = t.frame_candidates[i];
                                 if (frame.has_face && frame.score > best_score) {
                                     best_score = frame.score;
@@ -324,7 +325,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                 }
                             }
                             
-                            if (best_index != -1) {
+                            if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");
                                 upload_callback(best_frame.face_roi, t.id, "face");
