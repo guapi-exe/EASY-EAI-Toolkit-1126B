@@ -121,10 +121,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     // 在更新tracks之前，先处理即将过期的tracks，上传最佳帧
     std::vector<Track> expiring_tracks = get_expiring_tracks();
     for (const auto& track : expiring_tracks) {
+        log_debug("Track %d 即将过期，选择最佳帧上传", track.id);
         if (!track.frame_candidates.empty() && 
             capturedPersonIds.find(track.id) == capturedPersonIds.end() &&
             capturedFaceIds.find(track.id) == capturedFaceIds.end()) {
-            log_debug("Track %d 即将过期，选择最佳帧上传", track.id);
+            
             double best_score = -1;
             int best_index = -1;
             
