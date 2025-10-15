@@ -13,7 +13,6 @@ extern "C" {
 
 static std::vector<Track> tracks;
 static int next_id = 1;
-static const int MAX_MISSED = 30;
 
 void sort_init() { 
     tracks.clear(); 
