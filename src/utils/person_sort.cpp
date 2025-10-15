@@ -234,6 +234,17 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         auto it = std::remove_if(tracks.begin(), tracks.end(),
                     [](const Track& t){
                         if(t.missed > MAX_MISSED){
+                            log_debug("Person disappeared (M=0): ID=%d, processing best frame upload", t.id);
+                            log_debug("upload_callback: %s, frame_candidates: %zu", 
+                                     upload_callback ? "YES" : "NO", t.frame_candidates.size());
+                            
+                            if (captured_person_ids && captured_face_ids) {
+                                log_debug("ID=%d already captured? person:%s face:%s", t.id,
+                                         captured_person_ids->find(t.id) != captured_person_ids->end() ? "YES" : "NO",
+                                         captured_face_ids->find(t.id) != captured_face_ids->end() ? "YES" : "NO");
+                            } else {
+                                log_debug("captured_person_ids or captured_face_ids is NULL");
+                            }
                             
                             if (upload_callback && !t.frame_candidates.empty() && 
                                 captured_person_ids && captured_face_ids &&
@@ -251,7 +262,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                         best_index = i;
                                     }
                                 }
-                                log_debug("Best frame found for Track %d", t.id);
+                                log_debug("Best frame found for Track %d, best_index=%zu, candidates=%zu", 
+                                         t.id, best_index, t.frame_candidates.size());
                                 if (best_index != SIZE_MAX) {
                                     const auto& best_frame = t.frame_candidates[best_index];
                                     upload_callback(best_frame.person_roi, t.id, "person");
@@ -262,6 +274,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                     captured_person_ids->insert(t.id);
                                     captured_face_ids->insert(t.id);
                                 }
+                            } else {
+                                log_debug("Track %d upload conditions not met", t.id);
                             }
                             
                             return true;
@@ -333,7 +347,18 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed > MAX_MISSED){
-
+                        log_debug("Person disappeared: ID=%d, processing best frame upload", t.id);
+                        log_debug("upload_callback: %s, frame_candidates: %zu", 
+                                 upload_callback ? "YES" : "NO", t.frame_candidates.size());
+                        
+                        if (captured_person_ids && captured_face_ids) {
+                            log_debug("ID=%d already captured? person:%s face:%s", t.id,
+                                     captured_person_ids->find(t.id) != captured_person_ids->end() ? "YES" : "NO",
+                                     captured_face_ids->find(t.id) != captured_face_ids->end() ? "YES" : "NO");
+                        } else {
+                            log_debug("captured_person_ids or captured_face_ids is NULL");
+                        }
+                        
                         if (upload_callback && !t.frame_candidates.empty() && 
                             captured_person_ids && captured_face_ids &&
                             captured_person_ids->find(t.id) == captured_person_ids->end() &&
@@ -350,7 +375,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                     best_index = i;
                                 }
                             }
-                            log_debug("Best frame found for Track %d", t.id);
+                            log_debug("Best frame found for Track %d, best_index=%zu, candidates=%zu", 
+                                     t.id, best_index, t.frame_candidates.size());
                             if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");
@@ -361,6 +387,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                 captured_person_ids->insert(t.id);
                                 captured_face_ids->insert(t.id);
                             }
+                        } else {
+                            log_debug("Track %d upload conditions not met", t.id);
                         }
                         
                         return true;
