@@ -1,4 +1,5 @@
 #include "sort_tracker.h"
+#include "main.h"
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include <algorithm>
