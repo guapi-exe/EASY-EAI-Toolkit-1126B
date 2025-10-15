@@ -174,7 +174,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                 if (fbox.width > 0 && fbox.height > 0) {
                     Mat face_aligned = person_roi(fbox).clone();
                     if (computeFocusMeasure(face_aligned) > 100) {
-                        // 记录候选帧数据
+                        // 创建候选帧数据并通过接口添加到 person_sort.cpp 中的原始 tracks
                         Track::FrameData frame_data;
                         frame_data.score = current_score;
                         frame_data.person_roi = person_roi.clone();
@@ -183,22 +183,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         frame_data.clarity = current_clarity;
                         frame_data.area_ratio = area_ratio;
                         
-                        if (t.frame_candidates.size() < 20) {
-                            t.frame_candidates.push_back(frame_data);
-                        } else {
-                            auto min_it = std::min_element(t.frame_candidates.begin(), t.frame_candidates.end(),
-                                [](const Track::FrameData& a, const Track::FrameData& b) {
-                                    return a.score < b.score;
-                                });
-                            
-                            if (current_score > min_it->score) {
-                                *min_it = frame_data;  
-                                //log_debug("Track %d 替换低分帧 (新分数: %.2f > 旧分数: %.2f)", t.id, current_score, min_it->score);
-                            } else {
-                                //log_debug("Track %d 跳过低分帧 (分数: %.2f 不高于最低分: %.2f)", t.id, current_score, min_it->score);
-                                continue; 
-                            }
-                        }
+                        add_frame_candidate(t.id, frame_data);
                         
                         log_debug("Track %d 记录候选帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
                                  t.id, current_clarity, area_ratio*100, current_score);

@@ -53,5 +53,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets);
 std::vector<Track> get_expiring_tracks(); // 获取即将过期的tracks
 void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
                         std::unordered_set<int>* person_ids, std::unordered_set<int>* face_ids);
+void add_frame_candidate(int track_id, const Track::FrameData& frame_data); // 添加候选帧
 
 #endif

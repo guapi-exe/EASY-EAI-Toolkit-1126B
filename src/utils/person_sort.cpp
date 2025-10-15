@@ -234,17 +234,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         auto it = std::remove_if(tracks.begin(), tracks.end(),
                     [](const Track& t){
                         if(t.missed > MAX_MISSED){
-                            log_debug("Person disappeared (M=0): ID=%d, processing best frame upload", t.id);
-                            log_debug("upload_callback: %s, frame_candidates: %zu", 
-                                     upload_callback ? "YES" : "NO", t.frame_candidates.size());
-                            
-                            if (captured_person_ids && captured_face_ids) {
-                                log_debug("ID=%d already captured? person:%s face:%s", t.id,
-                                         captured_person_ids->find(t.id) != captured_person_ids->end() ? "YES" : "NO",
-                                         captured_face_ids->find(t.id) != captured_face_ids->end() ? "YES" : "NO");
-                            } else {
-                                log_debug("captured_person_ids or captured_face_ids is NULL");
-                            }
                             
                             if (upload_callback && !t.frame_candidates.empty() && 
                                 captured_person_ids && captured_face_ids &&
@@ -262,8 +251,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                         best_index = i;
                                     }
                                 }
-                                log_debug("Best frame found for Track %d, best_index=%zu, candidates=%zu", 
-                                         t.id, best_index, t.frame_candidates.size());
                                 if (best_index != SIZE_MAX) {
                                     const auto& best_frame = t.frame_candidates[best_index];
                                     upload_callback(best_frame.person_roi, t.id, "person");
@@ -347,17 +334,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed > MAX_MISSED){
-                        log_debug("Person disappeared: ID=%d, processing best frame upload", t.id);
-                        log_debug("upload_callback: %s, frame_candidates: %zu", 
-                                 upload_callback ? "YES" : "NO", t.frame_candidates.size());
-                        
-                        if (captured_person_ids && captured_face_ids) {
-                            log_debug("ID=%d already captured? person:%s face:%s", t.id,
-                                     captured_person_ids->find(t.id) != captured_person_ids->end() ? "YES" : "NO",
-                                     captured_face_ids->find(t.id) != captured_face_ids->end() ? "YES" : "NO");
-                        } else {
-                            log_debug("captured_person_ids or captured_face_ids is NULL");
-                        }
                         
                         if (upload_callback && !t.frame_candidates.empty() && 
                             captured_person_ids && captured_face_ids &&
@@ -375,8 +351,6 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                     best_index = i;
                                 }
                             }
-                            log_debug("Best frame found for Track %d, best_index=%zu, candidates=%zu", 
-                                     t.id, best_index, t.frame_candidates.size());
                             if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");
@@ -411,4 +385,27 @@ std::vector<Track> get_expiring_tracks() {
     }
     
     return expiring_tracks;
+}
+
+void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
+    for (auto& t : tracks) {
+        if (t.id == track_id) {
+            if (t.frame_candidates.size() < 20) {
+                t.frame_candidates.push_back(frame_data);
+                log_debug("Track %d 添加候选帧 (评分: %.2f, 候选帧总数: %zu)", 
+                         track_id, frame_data.score, t.frame_candidates.size());
+            } else {
+                auto min_it = std::min_element(t.frame_candidates.begin(), t.frame_candidates.end(),
+                    [](const Track::FrameData& a, const Track::FrameData& b) {
+                        return a.score < b.score;
+                    });
+                
+                if (frame_data.score > min_it->score) {
+                    *min_it = frame_data;
+                    log_debug("Track %d 替换低分帧 (新分数: %.2f)", track_id, frame_data.score);
+                }
+            }
+            break;
+        }
+    }
 }
