@@ -7,6 +7,8 @@
 #include "tinyekf.h"
 #include <algorithm>
 #include <cstdio>
+#include <functional>
+#include <set>
 
 
 using namespace cv;
@@ -49,5 +51,7 @@ struct Track {
 void sort_init();
 std::vector<Track> sort_update(const std::vector<Detection>& dets);
 std::vector<Track> get_expiring_tracks(); // 获取即将过期的tracks
+void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
+                        std::set<int>* person_ids, std::set<int>* face_ids);
 
 #endif

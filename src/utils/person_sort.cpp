@@ -1,20 +1,34 @@
 #include "sort_tracker.h"
-#include "main.h"
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cstdio>
 #include "tinyekf.h"
+#include <functional>
+#include <set>
 extern "C" {
 #include "log.h"
 }
 
 static std::vector<Track> tracks;
 static int next_id = 1;
+static const int MAX_MISSED = 30;
 
 void sort_init() { 
     tracks.clear(); 
     next_id = 1; 
+}
+
+// 添加上传回调函数指针
+static std::function<void(const cv::Mat&, int, const std::string&)> upload_callback = nullptr;
+static std::set<int>* captured_person_ids = nullptr;
+static std::set<int>* captured_face_ids = nullptr;
+
+void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
+                        std::set<int>* person_ids, std::set<int>* face_ids) {
+    upload_callback = callback;
+    captured_person_ids = person_ids;
+    captured_face_ids = face_ids;
 }
 
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -286,15 +300,47 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         }
     }
     
-    // 删除长期丢失的tracks
-    tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+    // 删除长期丢失的tracks，但在删除前先处理上传
+    auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
-                    if(t.missed>MAX_MISSED){
-                        log_debug("Person disappeared: ID=%d", t.id);
+                    if(t.missed > MAX_MISSED){
+                        log_debug("Person disappeared: ID=%d, processing best frame upload", t.id);
+                        
+                        // 在删除前处理最佳帧上传
+                        if (upload_callback && !t.frame_candidates.empty() && 
+                            captured_person_ids && captured_face_ids &&
+                            captured_person_ids->find(t.id) == captured_person_ids->end() &&
+                            captured_face_ids->find(t.id) == captured_face_ids->end()) {
+                            
+                            double best_score = -1;
+                            int best_index = -1;
+                            
+                            // 找到分数最高且有人脸的帧
+                            for (int i = 0; i < t.frame_candidates.size(); i++) {
+                                const auto& frame = t.frame_candidates[i];
+                                if (frame.has_face && frame.score > best_score) {
+                                    best_score = frame.score;
+                                    best_index = i;
+                                }
+                            }
+                            
+                            if (best_index != -1) {
+                                const auto& best_frame = t.frame_candidates[best_index];
+                                upload_callback(best_frame.person_roi, t.id, "person");
+                                upload_callback(best_frame.face_roi, t.id, "face");
+                                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
+                                         t.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
+                                
+                                captured_person_ids->insert(t.id);
+                                captured_face_ids->insert(t.id);
+                            }
+                        }
+                        
                         return true;
                     }
                     return false;
-                }), tracks.end());
+                });
+    tracks.erase(it, tracks.end());
 
     return tracks;
 }

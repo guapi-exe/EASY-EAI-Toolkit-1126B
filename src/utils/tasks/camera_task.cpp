@@ -52,6 +52,11 @@ void CameraTask::run() {
     }
     sort_init();
 
+    set_upload_callback([this](const cv::Mat& img, int id, const std::string& type) {
+        if (uploadCallback) {
+            uploadCallback(img, id, type);
+        }
+    }, &capturedPersonIds, &capturedFaceIds);
     /*
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
@@ -116,38 +121,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         det.x2 = roi.x + roi.width; det.y2 = roi.y + roi.height; 
         det.prop = d.prop;
         dets.push_back(det);
-    }
-    
-    // 在更新tracks之前，先处理即将过期的tracks，上传最佳帧
-    std::vector<Track> expiring_tracks = get_expiring_tracks();
-    for (const auto& track : expiring_tracks) {
-        log_debug("Track %d 即将过期，选择最佳帧上传", track.id);
-        if (!track.frame_candidates.empty() && 
-            capturedPersonIds.find(track.id) == capturedPersonIds.end() &&
-            capturedFaceIds.find(track.id) == capturedFaceIds.end()) {
-            
-            double best_score = -1;
-            int best_index = -1;
-            
-            for (int i = 0; i < track.frame_candidates.size(); i++) {
-                const auto& frame = track.frame_candidates[i];
-                if (frame.has_face && frame.score > best_score) {
-                    best_score = frame.score;
-                    best_index = i;
-                }
-            }
-            
-            if (best_index != -1 && uploadCallback) {
-                const auto& best_frame = track.frame_candidates[best_index];
-                uploadCallback(best_frame.person_roi, track.id, "person");
-                uploadCallback(best_frame.face_roi, track.id, "face");
-                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
-                         track.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
-                
-                capturedPersonIds.insert(track.id);
-                capturedFaceIds.insert(track.id);
-            }
-        }
     }
 
     vector<Track> tracks = sort_update(dets);
