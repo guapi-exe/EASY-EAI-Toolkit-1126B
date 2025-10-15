@@ -231,15 +231,44 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     }
     
     if (M == 0) {
-        // 没有检测，只更新丢失计数
-        tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+        auto it = std::remove_if(tracks.begin(), tracks.end(),
                     [](const Track& t){
-                        if(t.missed>MAX_MISSED){
-                            log_debug("Person disappeared: ID=%d", t.id);
+                        if(t.missed > MAX_MISSED){
+                            
+                            if (upload_callback && !t.frame_candidates.empty() && 
+                                captured_person_ids && captured_face_ids &&
+                                captured_person_ids->find(t.id) == captured_person_ids->end() &&
+                                captured_face_ids->find(t.id) == captured_face_ids->end()) {
+                                
+                                double best_score = -1;
+                                size_t best_index = SIZE_MAX;
+                                
+                                // 找到分数最高且有人脸的帧
+                                for (size_t i = 0; i < t.frame_candidates.size(); i++) {
+                                    const auto& frame = t.frame_candidates[i];
+                                    if (frame.has_face && frame.score > best_score) {
+                                        best_score = frame.score;
+                                        best_index = i;
+                                    }
+                                }
+                                log_debug("Best frame found for Track %d", t.id);
+                                if (best_index != SIZE_MAX) {
+                                    const auto& best_frame = t.frame_candidates[best_index];
+                                    upload_callback(best_frame.person_roi, t.id, "person");
+                                    upload_callback(best_frame.face_roi, t.id, "face");
+                                    log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
+                                             t.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
+                                    
+                                    captured_person_ids->insert(t.id);
+                                    captured_face_ids->insert(t.id);
+                                }
+                            }
+                            
                             return true;
                         }
                         return false;
-                    }), tracks.end());
+                    });
+        tracks.erase(it, tracks.end());
         return tracks;
     }
 
@@ -304,9 +333,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed > MAX_MISSED){
-                        log_debug("Person disappeared: ID=%d, processing best frame upload", t.id);
-                        
-                        // 在删除前处理最佳帧上传
+
                         if (upload_callback && !t.frame_candidates.empty() && 
                             captured_person_ids && captured_face_ids &&
                             captured_person_ids->find(t.id) == captured_person_ids->end() &&
@@ -323,7 +350,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                     best_index = i;
                                 }
                             }
-                            
+                            log_debug("Best frame found for Track %d", t.id);
                             if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");

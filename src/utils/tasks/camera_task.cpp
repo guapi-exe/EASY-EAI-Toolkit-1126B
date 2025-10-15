@@ -110,7 +110,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
-        if (d.prop < 0.8) continue;
+        if (d.prop < 0.7) continue;
         Rect roi(max(0,d.box.left), max(0,d.box.top),
                  min(CAMERA_WIDTH-1,d.box.right)-max(0,d.box.left),
                  min(CAMERA_HEIGHT-1,d.box.bottom)-max(0,d.box.top));
@@ -151,8 +151,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (t.is_approaching && !t.has_captured && !face_result.empty()) {
             double current_clarity = computeFocusMeasure(person_roi);
             float current_area = t.bbox.width * t.bbox.height;
-            
-            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.2f; // 期望面积约占画面20%
+
+            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f; // 期望面积约占画面15%
             float area_score = 1.0f / (1.0f + abs(current_area - ideal_area) / ideal_area);
             
             double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
