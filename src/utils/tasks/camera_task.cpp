@@ -124,7 +124,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (!track.frame_candidates.empty() && 
             capturedPersonIds.find(track.id) == capturedPersonIds.end() &&
             capturedFaceIds.find(track.id) == capturedFaceIds.end()) {
-            
+            log_debug("Track %d 即将过期，选择最佳帧上传", track.id);
             double best_score = -1;
             int best_index = -1;
             
@@ -181,13 +181,13 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.2f; // 期望面积约占画面20%
             float area_score = 1.0f / (1.0f + abs(current_area - ideal_area) / ideal_area);
             
-            double current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
+            double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
 
             // 计算人员在画面中的占比
             float area_ratio = current_area / (CAMERA_WIDTH * CAMERA_HEIGHT);
 
-            // 当人员占比大于10%且有人脸时，记录候选帧
-            if (area_ratio > 0.1f && current_clarity > 100) {
+            // 当人员占比大于5%且有人脸时，记录候选帧
+            if (area_ratio > 0.05f && current_clarity > 100) {
                 // 处理人脸框
                 Rect fbox = cv::Rect(face_result[0].box);
                 int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
