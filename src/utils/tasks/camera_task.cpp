@@ -12,7 +12,10 @@ using namespace cv;
 using namespace std;
 
 CameraTask::CameraTask(const string& personModel, const string& faceModel, int index)
-    : personModelPath(personModel), faceModelPath(faceModel), cameraIndex(index), running(false) {}
+    : personModelPath(personModel), faceModelPath(faceModel), cameraIndex(index), running(false) {
+    startTime = std::chrono::steady_clock::now();
+    lastFPSUpdate = startTime;
+}
 
 CameraTask::~CameraTask() { stop(); }
 
@@ -37,6 +40,26 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     cvtColor(img, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
     return mean(lap.mul(lap))[0];
+}
+
+// -------------------- FPS计算 --------------------
+void CameraTask::updateFPS() {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastFPSUpdate);
+    
+    if (elapsed.count() >= 1) { 
+        long currentFrames = totalFrames.load();
+        long framesDiff = currentFrames - framesAtLastUpdate;
+        currentFPS = static_cast<double>(framesDiff) / elapsed.count();
+        
+        framesAtLastUpdate = currentFrames;
+        lastFPSUpdate = now;
+        
+        auto totalElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startTime);
+        if (totalElapsed.count() % 10 == 0 && totalElapsed.count() > 0) {
+            log_info("帧数统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds", currentFrames, currentFPS.load(), totalElapsed.count());
+        }
+    }
 }
 
 void CameraTask::run() {
@@ -77,6 +100,11 @@ void CameraTask::run() {
         if (usbcamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty()) continue;
+        
+        // 帧数统计
+        totalFrames++;
+        updateFPS();
+        
         processFrame(frame, personCtx, faceCtx);
     }
 
@@ -141,10 +169,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             // 判断是否正在接近摄像机
             if (ratio > 0.1f) {
                 t.is_approaching = true;
-                //log_info("Track %d 正在接近摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
             } else if (ratio < -0.1f) {
                 t.is_approaching = false;
-                //log_info("Track %d 正在远离摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
             }
         }
 
@@ -184,9 +210,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         frame_data.area_ratio = area_ratio;
                         
                         add_frame_candidate(t.id, frame_data);
-                        
-                        log_debug("Track %d 记录候选帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
-                                 t.id, current_clarity, area_ratio*100, current_score);
                     }
                 }
             }
