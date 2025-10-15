@@ -303,3 +303,16 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
 
     return tracks;
 }
+
+std::vector<Track> get_expiring_tracks() {
+    std::vector<Track> expiring_tracks;
+    
+    // 找到即将被删除的tracks
+    for (const auto& t : tracks) {
+        if (t.missed > MAX_MISSED) {
+            expiring_tracks.push_back(t);
+        }
+    }
+    
+    return expiring_tracks;
+}

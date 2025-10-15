@@ -132,7 +132,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         vector<det> face_result;
         face_detect_run(faceCtx, person_roi, face_result);
 
-        // ----------- 智能拍照逻辑：只在接近摄像机时的最佳位置拍照 -----------
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
             float area_prev = t.bbox_history[t.bbox_history.size() - 5];
@@ -141,68 +140,101 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             // 判断是否正在接近摄像机
             if (ratio > 0.1f) {
                 t.is_approaching = true;
-                log_info("Track %d 正在接近摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
+                //log_info("Track %d 正在接近摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
             } else if (ratio < -0.1f) {
                 t.is_approaching = false;
-                log_info("Track %d 正在远离摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
+                //log_info("Track %d 正在远离摄像机 (面积变化: %.2f%%)", t.id, ratio*100);
             }
         }
 
-        // 只在人物接近摄像机且有人脸检测到的情况下考虑拍照
         if (t.is_approaching && !t.has_captured && !face_result.empty()) {
             double current_clarity = computeFocusMeasure(person_roi);
             float current_area = t.bbox.width * t.bbox.height;
             
-            // 计算适中的距离分数 (面积在合理范围内得分更高)
-            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.05f; // 期望面积约占画面5%
+            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.2f; // 期望面积约占画面20%
             float area_score = 1.0f / (1.0f + abs(current_area - ideal_area) / ideal_area);
             
-            // 综合评分：清晰度权重70%，距离适中权重30%
             double current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
-            
-            // 如果当前状态比之前记录的最佳状态更好，更新最佳状态
-            if (current_score > t.best_clarity && current_clarity > 100) {
-                t.best_clarity = current_score;
-                t.best_area = current_area;
-                log_info("Track %d 更新最佳拍照状态 (清晰度: %.2f, 面积: %.0f, 综合评分: %.2f)", 
-                         t.id, current_clarity, current_area, current_score);
-            }
-            
-            // 如果检测到人物开始远离（面积开始缩小），触发拍照
-            if (t.bbox_history.size() >= 8) {
-                float recent_area = t.bbox_history[t.bbox_history.size() - 3];
-                if (current_area < recent_area * 0.95f && t.best_clarity > 0) {
-                    // 人物开始远离，在最佳位置拍照
-                    if (current_clarity > 100) {
-                        // 原始人脸框
-                        Rect fbox = cv::Rect(face_result[0].box);
 
-                        int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
-                        int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
-                        fbox.x = std::max(0, fbox.x - w_expand);
-                        fbox.y = std::max(0, fbox.y - h_expand);
-                        fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-                        fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+            // 计算人员在画面中的占比
+            float area_ratio = current_area / (CAMERA_WIDTH * CAMERA_HEIGHT);
 
-                        if (fbox.width > 0 && fbox.height > 0) {
-                            Mat face_aligned = person_roi(fbox).clone();
-                            if (computeFocusMeasure(face_aligned) > 100) {
-                                if (capturedPersonIds.find(t.id) == capturedPersonIds.end() &&
-                                    capturedFaceIds.find(t.id) == capturedFaceIds.end()) {
-                                    if (uploadCallback) {
-                                        uploadCallback(person_roi, t.id, "person");
-                                        uploadCallback(face_aligned, t.id, "face");
-                                        log_info("Track %d 在最佳位置拍照成功 (清晰度: %.2f, 面积: %.0f)", 
-                                                 t.id, current_clarity, current_area);
-                                    }
-                                    capturedPersonIds.insert(t.id);
-                                    capturedFaceIds.insert(t.id);
-                                    t.has_captured = true;
-                                }
+            // 当人员占比大于10%且有人脸时，记录候选帧
+            if (area_ratio > 0.1f && current_clarity > 100) {
+                // 处理人脸框
+                Rect fbox = cv::Rect(face_result[0].box);
+                int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
+                int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
+                fbox.x = std::max(0, fbox.x - w_expand);
+                fbox.y = std::max(0, fbox.y - h_expand);
+                fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
+                fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+
+                if (fbox.width > 0 && fbox.height > 0) {
+                    Mat face_aligned = person_roi(fbox).clone();
+                    if (computeFocusMeasure(face_aligned) > 100) {
+                        // 记录候选帧数据
+                        Track::FrameData frame_data;
+                        frame_data.score = current_score;
+                        frame_data.person_roi = person_roi.clone();
+                        frame_data.face_roi = face_aligned.clone();
+                        frame_data.has_face = true;
+                        frame_data.clarity = current_clarity;
+                        frame_data.area_ratio = area_ratio;
+                        
+                        if (t.frame_candidates.size() < 20) {
+                            t.frame_candidates.push_back(frame_data);
+                        } else {
+                            auto min_it = std::min_element(t.frame_candidates.begin(), t.frame_candidates.end(),
+                                [](const Track::FrameData& a, const Track::FrameData& b) {
+                                    return a.score < b.score;
+                                });
+                            
+                            if (current_score > min_it->score) {
+                                *min_it = frame_data;  
+                                //log_debug("Track %d 替换低分帧 (新分数: %.2f > 旧分数: %.2f)", t.id, current_score, min_it->score);
+                            } else {
+                                //log_debug("Track %d 跳过低分帧 (分数: %.2f 不高于最低分: %.2f)", t.id, current_score, min_it->score);
+                                continue; 
                             }
                         }
+                        
+                        log_debug("Track %d 记录候选帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
+                                 t.id, current_clarity, area_ratio*100, current_score);
                     }
                 }
+            }
+        }
+    }
+    
+    // 处理即将过期的tracks，上传最佳帧
+    std::vector<Track> expiring_tracks = get_expiring_tracks();
+    for (const auto& track : expiring_tracks) {
+        if (!track.frame_candidates.empty() && 
+            capturedPersonIds.find(track.id) == capturedPersonIds.end() &&
+            capturedFaceIds.find(track.id) == capturedFaceIds.end()) {
+            
+            double best_score = -1;
+            int best_index = -1;
+            
+            // 找到分数最高且有人脸的帧
+            for (int i = 0; i < track.frame_candidates.size(); i++) {
+                const auto& frame = track.frame_candidates[i];
+                if (frame.has_face && frame.score > best_score) {
+                    best_score = frame.score;
+                    best_index = i;
+                }
+            }
+            
+            if (best_index != -1 && uploadCallback) {
+                const auto& best_frame = track.frame_candidates[best_index];
+                uploadCallback(best_frame.person_roi, track.id, "person");
+                uploadCallback(best_frame.face_roi, track.id, "face");
+                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
+                         track.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
+                
+                capturedPersonIds.insert(track.id);
+                capturedFaceIds.insert(track.id);
             }
         }
     }

@@ -33,9 +33,21 @@ struct Track {
     float best_area; // 最佳拍照时的面积
     double best_clarity; // 最佳拍照时的清晰度
     bool has_captured; // 是否已经拍照
+    
+    // 存储每帧的评分和图像数据
+    struct FrameData {
+        double score;
+        cv::Mat person_roi;
+        cv::Mat face_roi;
+        bool has_face;
+        double clarity;
+        float area_ratio;
+    };
+    std::vector<FrameData> frame_candidates; // 候选帧数据
 };
 
 void sort_init();
 std::vector<Track> sort_update(const std::vector<Detection>& dets);
+std::vector<Track> get_expiring_tracks(); // 获取即将过期的tracks
 
 #endif
