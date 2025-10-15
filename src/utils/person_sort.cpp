@@ -10,16 +10,12 @@ extern "C" {
 
 static std::vector<Track> tracks;
 static int next_id = 1;
-static const int MAX_MISSED = 30;
-static const int IMAGE_WIDTH = 1920;   // 图像宽度
-static const int IMAGE_HEIGHT = 1080;  // 图像高度
 
 void sort_init() { 
     tracks.clear(); 
     next_id = 1; 
 }
 
-//-----------------工具函数-----------------
 
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
     float xx1 = std::max(a.x, b.x);
@@ -52,7 +48,6 @@ static float hist_distance(const cv::Mat& a, const cv::Mat& b) {
     return cv::compareHist(a, b, cv::HISTCMP_BHATTACHARYYA);
 }
 
-//-----------------匈牙利算法-----------------
 
 static std::vector<std::pair<int,int>> hungarian_algorithm(const std::vector<std::vector<float>>& cost_matrix, float max_cost) {
     int n = cost_matrix.size();
@@ -130,15 +125,15 @@ static void predict_track(Track& t) {
     t.bbox.height = std::max(10.0f, t.ekf.x[3]);   // 防止高度过小
 
     // 边界检查，防止bbox超出图像边界
-    t.bbox.x = std::max(0.0f, std::min((float)(IMAGE_WIDTH - t.bbox.width), t.bbox.x));
-    t.bbox.y = std::max(0.0f, std::min((float)(IMAGE_HEIGHT - t.bbox.height), t.bbox.y));
+    t.bbox.x = std::max(0.0f, std::min((float)(CAMERA_WIDTH - t.bbox.width), t.bbox.x));
+    t.bbox.y = std::max(0.0f, std::min((float)(CAMERA_HEIGHT - t.bbox.height), t.bbox.y));
     
     // 确保bbox在图像范围内
-    if (t.bbox.x + t.bbox.width > IMAGE_WIDTH) {
-        t.bbox.width = IMAGE_WIDTH - t.bbox.x;
+    if (t.bbox.x + t.bbox.width > CAMERA_WIDTH) {
+        t.bbox.width = CAMERA_WIDTH - t.bbox.x;
     }
-    if (t.bbox.y + t.bbox.height > IMAGE_HEIGHT) {
-        t.bbox.height = IMAGE_HEIGHT - t.bbox.y;
+    if (t.bbox.y + t.bbox.height > CAMERA_HEIGHT) {
+        t.bbox.height = CAMERA_HEIGHT - t.bbox.y;
     }
 
     t.age++;

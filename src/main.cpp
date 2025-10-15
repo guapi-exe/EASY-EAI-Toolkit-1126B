@@ -1,3 +1,4 @@
+#include "main.h"
 #include "task_manager.h"
 #include "camera_task.h"
 #include "uploader_task.h"
@@ -35,7 +36,7 @@ int main() {
         commandManager.executeCommands();
     });
 
-    CameraTask camera("person_detect.model", "face_detect.model", 51);
+    CameraTask camera("person_detect.model", "face_detect.model", CAMERA_INDEX_2);
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
         if (type == "all")
         {

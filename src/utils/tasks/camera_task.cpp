@@ -1,4 +1,5 @@
 #include "camera_task.h"
+#include "main.h"
 #include "person_detect.h"
 #include "face_detect.h"
 #include "sort_tracker.h"
@@ -9,11 +10,6 @@ extern "C" {
 
 using namespace cv;
 using namespace std;
-
-#define CAMERA_WIDTH    1920
-#define CAMERA_HEIGHT   1080
-#define IMGRATIO        3
-#define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
 
 CameraTask::CameraTask(const string& personModel, const string& faceModel, int index)
     : personModelPath(personModel), faceModelPath(faceModel), cameraIndex(index), running(false) {}
