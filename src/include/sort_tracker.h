@@ -25,7 +25,9 @@ struct Track {
     float prop;
     int age;
     int missed; // 丢失帧数
+    int hits;   // 命中次数，用于稳定性评估  
     bool active;
+    bool confirmed; // 是否已确认的track
 };
 
 void sort_init();

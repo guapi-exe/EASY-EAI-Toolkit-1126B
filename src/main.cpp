@@ -89,8 +89,6 @@ int main() {
             ssize_t len = read(STDIN_FILENO, buf, sizeof(buf) - 1);
             if (len > 0) {
                 buf[len] = '\0';
-                log_info("Main: Received from stdin: %s", buf);
-                // 通过串口发送
                 serial.send(buf);
                 log_info("Main: Sent to serial: %s", buf);
             }
