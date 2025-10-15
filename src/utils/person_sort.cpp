@@ -17,7 +17,6 @@ void sort_init() {
     next_id = 1; 
 }
 
-
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
     float xx1 = std::max(a.x, b.x);
     float yy1 = std::max(a.y, b.y);
