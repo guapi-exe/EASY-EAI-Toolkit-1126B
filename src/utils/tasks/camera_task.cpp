@@ -183,6 +183,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
     
+    /* //经测试硬件RGA加速反而更慢（加锁开销大），继续OpenCV软件缩放
     // 使用RGA硬件加速进行缩放 (4K -> 720p)
     Image src_img, dst_img;
     
@@ -211,11 +212,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         memcpy(resized_buffer_720p, resized_frame.data, IMAGE_WIDTH * IMAGE_HEIGHT * 3);
     }
     Mat resized_frame(IMAGE_HEIGHT, IMAGE_WIDTH, CV_8UC3, resized_buffer_720p);
+    */
     
+    Mat resized_frame;
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
-    // 在720p坐标系下构建检测结果（用于追踪）
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
@@ -228,7 +232,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         // 使用720p图像的ROI用于直方图计算（追踪用）
         Detection det; 
-        det.roi = resized_frame(roi_720p).clone(); 
+        det.roi = resized_frame(roi_720p); 
         det.x1 = roi_720p.x; 
         det.y1 = roi_720p.y; 
         det.x2 = roi_720p.x + roi_720p.width; 
