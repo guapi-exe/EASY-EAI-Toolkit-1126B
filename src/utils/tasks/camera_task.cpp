@@ -175,12 +175,12 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     Mat resized_frame;
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
     
-    // 在缩放后的图像上进行人体检测
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
-    // 在720p坐标系下构建检测结果（用于追踪）
     vector<Detection> dets;
+    dets.reserve(detect_result_group.count); // 预分配内存
+    
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
         if (d.prop < 0.7) continue;
@@ -191,9 +191,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                       min(IMAGE_HEIGHT-1, d.box.bottom) - max(0, d.box.top));
         if (roi_720p.width <=0 || roi_720p.height <=0) continue;
         
-        // 使用720p图像的ROI用于直方图计算（追踪用）
         Detection det; 
-        det.roi = resized_frame(roi_720p).clone(); 
+        det.roi = resized_frame(roi_720p); // 不clone，只引用
         det.x1 = roi_720p.x; 
         det.y1 = roi_720p.y; 
         det.x2 = roi_720p.x + roi_720p.width; 
@@ -206,11 +205,32 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Track> tracks = sort_update(dets);
 
     for (auto& t : tracks) {
+        // 跳过不活跃的tracks，减少处理
+        if (!t.active || t.missed > 3) continue;
+        
         // t.bbox 是720p坐标系下的边界框
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
         if (bbox_720p.width <=0 || bbox_720p.height <=0) continue;
+
+        // 接近性检测 - 提前计算避免重复
+        bool is_approaching_now = false;
+        if (t.bbox_history.size() >= 5) {
+            float area_now = t.bbox_history.back();
+            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
+            float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
+            
+            if (ratio > 0.1f) {
+                t.is_approaching = true;
+                is_approaching_now = true;
+            } else if (ratio < -0.1f) {
+                t.is_approaching = false;
+            }
+        }
         
-        // 将720p的bbox映射回4K坐标系，用于从原图截取高质量ROI
+        // 只对正在接近且未捕获的目标进行人脸检测
+        if (!is_approaching_now || t.has_captured) continue;
+        
+        // 将720p的bbox映射回4K坐标系
         int orig_x = static_cast<int>(bbox_720p.x / scale_x);
         int orig_y = static_cast<int>(bbox_720p.y / scale_y);
         int orig_width = static_cast<int>(bbox_720p.width / scale_x);
@@ -225,77 +245,69 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (orig_width <= 0 || orig_height <= 0) continue;
         
         Rect bbox_4k(orig_x, orig_y, orig_width, orig_height);
+        float current_area_4k = bbox_4k.width * bbox_4k.height;
+        float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
         
-        // 从4K原图中截取高质量person ROI
-        Mat person_roi = frame(bbox_4k).clone();
+        // 面积过小时跳过，等待更接近时再处理
+        if (area_ratio < 0.05f) continue;
         
-        // 将人体ROI缩放到较小尺寸进行人脸检测（提高速度）
+        // 从4K原图中截取person ROI（不clone，直接引用）
+        Mat person_roi_ref = frame(bbox_4k);
+        
+        // 缩放到更小尺寸进行人脸检测（320宽度足够）
         Mat person_roi_resized;
-        int target_width = min(640, person_roi.cols);
-        int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
-        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
+        int target_width = min(320, person_roi_ref.cols);
+        int target_height = static_cast<int>(person_roi_ref.rows * target_width / (float)person_roi_ref.cols);
+        cv::resize(person_roi_ref, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_AREA);
         
         vector<det> face_result;
         face_detect_run(faceCtx, person_roi_resized, face_result);
         
-        // 将人脸检测结果映射回原始person_roi尺寸
-        float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
-        float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
-        for (auto& face : face_result) {
-            face.box.x = static_cast<int>(face.box.x * face_scale_x);
-            face.box.y = static_cast<int>(face.box.y * face_scale_y);
-            face.box.width = static_cast<int>(face.box.width * face_scale_x);
-            face.box.height = static_cast<int>(face.box.height * face_scale_y);
-        }
-
-        if (t.bbox_history.size() >= 5) {
-            float area_now = t.bbox_history.back();
-            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
-            float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
+        if (!face_result.empty()) {
+            // 将人脸检测结果映射回原始person_roi尺寸
+            float face_scale_x = (float)person_roi_ref.cols / (float)person_roi_resized.cols;
+            float face_scale_y = (float)person_roi_ref.rows / (float)person_roi_resized.rows;
             
-            // 判断是否正在接近摄像机
-            if (ratio > 0.1f) {
-                t.is_approaching = true;
-            } else if (ratio < -0.1f) {
-                t.is_approaching = false;
+            for (auto& face : face_result) {
+                face.box.x = static_cast<int>(face.box.x * face_scale_x);
+                face.box.y = static_cast<int>(face.box.y * face_scale_y);
+                face.box.width = static_cast<int>(face.box.width * face_scale_x);
+                face.box.height = static_cast<int>(face.box.height * face_scale_y);
             }
-        }
-
-        if (t.is_approaching && !t.has_captured && !face_result.empty()) {
-            float current_area_4k = bbox_4k.width * bbox_4k.height;
             
-            float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
-            
-            if (area_ratio > 0.05f) {
+            // 每3帧才计算一次清晰度，减少开销
+            if (t.hits % 3 == 0) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 
-                if (current_clarity > 100) {  // 清晰度阈值（需要根据实际情况调整）
+                if (current_clarity > 80) {  // 降低阈值，更容易通过
                     // 处理人脸框
                     Rect fbox = cv::Rect(face_result[0].box);
                     int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
                     int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
                     fbox.x = std::max(0, fbox.x - w_expand);
                     fbox.y = std::max(0, fbox.y - h_expand);
-                    fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-                    fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+                    fbox.width = std::min(person_roi_ref.cols - fbox.x, fbox.width + 2 * w_expand);
+                    fbox.height = std::min(person_roi_ref.rows - fbox.y, fbox.height + 2 * h_expand);
 
                     if (fbox.width > 0 && fbox.height > 0) {
+                        // 现在才clone需要保存的数据
+                        Mat person_roi = person_roi_ref.clone();
                         Mat face_aligned = person_roi(fbox).clone();
                         
-                        // 只对人脸也计算一次清晰度
+                        // 人脸清晰度检查（更宽松）
                         double face_clarity = computeFocusMeasure(face_aligned);
                         
-                        if (face_clarity > 100) {
+                        if (face_clarity > 60) {  // 降低人脸清晰度要求
                             // 计算综合评分
                             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
                             float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
                             double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
                             
-                            // 创建候选帧数据并通过接口添加到 person_sort.cpp 中的原始 tracks
+                            // 创建候选帧数据
                             Track::FrameData frame_data;
                             frame_data.score = current_score;
-                            frame_data.person_roi = person_roi.clone();
-                            frame_data.face_roi = face_aligned.clone();
+                            frame_data.person_roi = person_roi;
+                            frame_data.face_roi = face_aligned;
                             frame_data.has_face = true;
                             frame_data.clarity = current_clarity;
                             frame_data.area_ratio = area_ratio;
