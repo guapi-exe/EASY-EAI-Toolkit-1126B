@@ -262,16 +262,12 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
 
         if (t.is_approaching && !t.has_captured && !face_result.empty()) {
-            // 注意：t.bbox是720p坐标系，但我们用4K的person_roi计算面积
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             
-            // 计算人员在4K画面中的占比
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             
-            // 先检查面积，只有合适的面积才计算清晰度（减少计算量）
             if (area_ratio > 0.05f) {
-                // 只对符合条件的帧计算清晰度
-                double current_clarity = computeFocusMeasure(person_roi);
+                double current_clarity = computeFocusMeasure(person_roi_resized);
                 
                 if (current_clarity > 100) {  // 清晰度阈值（需要根据实际情况调整）
                     // 处理人脸框
