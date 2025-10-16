@@ -182,7 +182,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         detect_result_t& d = detect_result_group.results[i];
         if (d.prop < 0.7) continue;
         
-        // 边界检查（在720p坐标系下）
         Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
                       min(IMAGE_WIDTH-1, d.box.right) - max(0, d.box.left),
                       min(IMAGE_HEIGHT-1, d.box.bottom) - max(0, d.box.top));
@@ -199,7 +198,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         dets.push_back(det);
     }
 
-    vector<Track> tracks = sort_update(dets);
+    vector<Track> tracks;
 
     for (auto& t : tracks) {
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
