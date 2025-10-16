@@ -36,10 +36,42 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
-    Mat gray, lap;
-    cvtColor(img, gray, COLOR_BGR2GRAY);
+    int scale_factor = 4;
+    if (img.cols > 2000 || img.rows > 2000) {
+        scale_factor = 8; 
+    }
+    
+    // 方法1: 快速降采样+拉普拉斯（推荐，平衡速度和精度）
+    Mat small, gray, lap;
+    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
+    cvtColor(small, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
-    return mean(lap.mul(lap))[0];
+    Scalar mean_val, stddev_val;
+    meanStdDev(lap, mean_val, stddev_val);
+    return stddev_val.val[0] * stddev_val.val[0];
+    
+    /* 方法2: Sobel梯度均值（更快，推荐用于人脸）
+    Mat small, gray, grad_x, grad_y;
+    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
+    cvtColor(small, gray, COLOR_BGR2GRAY);
+    Sobel(gray, grad_x, CV_16S, 1, 0, 3);
+    Sobel(gray, grad_y, CV_16S, 0, 1, 3);
+    Mat abs_grad_x, abs_grad_y;
+    convertScaleAbs(grad_x, abs_grad_x);
+    convertScaleAbs(grad_y, abs_grad_y);
+    Mat grad;
+    addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad);
+    return mean(grad)[0];
+    */
+    
+    /* 方法3: 灰度方差（最快，可用于快速过滤）
+    Mat small, gray;
+    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
+    cvtColor(small, gray, COLOR_BGR2GRAY);
+    Scalar mean_val, stddev_val;
+    meanStdDev(gray, mean_val, stddev_val);
+    return stddev_val.val[0] * stddev_val.val[0];
+    */
 }
 
 // -------------------- FPS计算 --------------------
@@ -230,43 +262,50 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
 
         if (t.is_approaching && !t.has_captured && !face_result.empty()) {
-            double current_clarity = computeFocusMeasure(person_roi);
-            
             // 注意：t.bbox是720p坐标系，但我们用4K的person_roi计算面积
             float current_area_4k = bbox_4k.width * bbox_4k.height;
-
-            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f; // 期望面积约占画面15%
-            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
             
-            double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
-
             // 计算人员在4K画面中的占比
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
+            
+            // 先检查面积，只有合适的面积才计算清晰度（减少计算量）
+            if (area_ratio > 0.05f) {
+                // 只对符合条件的帧计算清晰度
+                double current_clarity = computeFocusMeasure(person_roi);
+                
+                if (current_clarity > 100) {  // 清晰度阈值（需要根据实际情况调整）
+                    // 处理人脸框
+                    Rect fbox = cv::Rect(face_result[0].box);
+                    int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
+                    int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
+                    fbox.x = std::max(0, fbox.x - w_expand);
+                    fbox.y = std::max(0, fbox.y - h_expand);
+                    fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
+                    fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
 
-            // 当人员占比大于5%且有人脸时，记录候选帧
-            if (area_ratio > 0.05f && current_clarity > 100) {
-                // 处理人脸框
-                Rect fbox = cv::Rect(face_result[0].box);
-                int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
-                int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
-                fbox.x = std::max(0, fbox.x - w_expand);
-                fbox.y = std::max(0, fbox.y - h_expand);
-                fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-                fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
-
-                if (fbox.width > 0 && fbox.height > 0) {
-                    Mat face_aligned = person_roi(fbox).clone();
-                    if (computeFocusMeasure(face_aligned) > 100) {
-                        // 创建候选帧数据并通过接口添加到 person_sort.cpp 中的原始 tracks
-                        Track::FrameData frame_data;
-                        frame_data.score = current_score;
-                        frame_data.person_roi = person_roi.clone();
-                        frame_data.face_roi = face_aligned.clone();
-                        frame_data.has_face = true;
-                        frame_data.clarity = current_clarity;
-                        frame_data.area_ratio = area_ratio;
+                    if (fbox.width > 0 && fbox.height > 0) {
+                        Mat face_aligned = person_roi(fbox).clone();
                         
-                        add_frame_candidate(t.id, frame_data);
+                        // 只对人脸也计算一次清晰度
+                        double face_clarity = computeFocusMeasure(face_aligned);
+                        
+                        if (face_clarity > 100) {
+                            // 计算综合评分
+                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
+                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
+                            double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
+                            
+                            // 创建候选帧数据并通过接口添加到 person_sort.cpp 中的原始 tracks
+                            Track::FrameData frame_data;
+                            frame_data.score = current_score;
+                            frame_data.person_roi = person_roi.clone();
+                            frame_data.face_roi = face_aligned.clone();
+                            frame_data.has_face = true;
+                            frame_data.clarity = current_clarity;
+                            frame_data.area_ratio = area_ratio;
+                            
+                            add_frame_candidate(t.id, frame_data);
+                        }
                     }
                 }
             }
