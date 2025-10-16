@@ -117,7 +117,7 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 #--------------------------
 set(camera_test_name camera_test)
 add_executable(${camera_test_name} camera_test.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_name} ${sysLib_list})
+target_link_libraries(${camera_test_name} ${sysLib_list} ${CURL_LIBRARIES})
 target_include_directories(${camera_test_name} PRIVATE ${api_inc})
 
 #--------------------------
@@ -125,5 +125,5 @@ target_include_directories(${camera_test_name} PRIVATE ${api_inc})
 #--------------------------
 set(camera_test_advanced_name camera_test_advanced)
 add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_advanced_name} ${sysLib_list})
+target_link_libraries(${camera_test_advanced_name} ${sysLib_list} ${CURL_LIBRARIES})
 target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
