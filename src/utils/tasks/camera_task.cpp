@@ -174,7 +174,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
     
     detect_result_group_t detect_result_group;
-    person_detect_run(personCtx, resized_frame, &detect_result_group);
+    //person_detect_run(personCtx, resized_frame, &detect_result_group);
 
     // 在720p坐标系下构建检测结果（用于追踪）
     vector<Detection> dets;
@@ -198,7 +198,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         dets.push_back(det);
     }
 
-    vector<Track> tracks;
+    vector<Track> tracks = sort_update(dets);
 
     for (auto& t : tracks) {
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
