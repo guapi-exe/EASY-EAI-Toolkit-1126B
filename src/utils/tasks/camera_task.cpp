@@ -36,7 +36,7 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
-    int scale_factor = 4;
+    int scale_factor = 8;
     if (img.cols > 2000 || img.rows > 2000) {
         scale_factor = 8; 
     }
