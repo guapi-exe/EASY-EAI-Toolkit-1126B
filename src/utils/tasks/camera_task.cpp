@@ -6,6 +6,7 @@
 extern "C" {
 #include "log.h"
 #include "camera.h"
+#include "rga_wrapper.h"
 }
 
 using namespace cv;
@@ -15,9 +16,21 @@ CameraTask::CameraTask(const string& personModel, const string& faceModel, int i
     : personModelPath(personModel), faceModelPath(faceModel), cameraIndex(index), running(false) {
     startTime = std::chrono::steady_clock::now();
     lastFPSUpdate = startTime;
+    
+    rga_init();
+    resized_buffer_720p = new unsigned char[IMAGE_WIDTH * IMAGE_HEIGHT * 3];
 }
 
-CameraTask::~CameraTask() { stop(); }
+CameraTask::~CameraTask() { 
+    stop(); 
+    
+    // 释放RGA资源
+    if (resized_buffer_720p) {
+        delete[] resized_buffer_720p;
+        resized_buffer_720p = nullptr;
+    }
+    rga_unInit();
+}
 
 void CameraTask::start() {
     if (running) return;
@@ -170,11 +183,37 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
     
-    Mat resized_frame;
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
+    // 使用RGA硬件加速进行缩放 (4K -> 720p)
+    Image src_img, dst_img;
+    
+    // 源图像设置 (4K BGR)
+    src_img.width = CAMERA_WIDTH;
+    src_img.height = CAMERA_HEIGHT;
+    src_img.hor_stride = CAMERA_WIDTH;
+    src_img.ver_stride = CAMERA_HEIGHT;
+    src_img.fmt = RK_FORMAT_BGR_888;
+    src_img.rotation = HAL_TRANSFORM_ROT_0;
+    src_img.pBuf = frame.data;
+    
+    // 目标图像设置 (720p BGR)
+    dst_img.width = IMAGE_WIDTH;
+    dst_img.height = IMAGE_HEIGHT;
+    dst_img.hor_stride = IMAGE_WIDTH;
+    dst_img.ver_stride = IMAGE_HEIGHT;
+    dst_img.fmt = RK_FORMAT_BGR_888;
+    dst_img.rotation = HAL_TRANSFORM_ROT_0;
+    dst_img.pBuf = resized_buffer_720p;
+    
+    if (srcImg_ConvertTo_dstImg(&dst_img, &src_img) != 0) {
+        log_error("RGA resize failed, fallback to OpenCV");
+        Mat resized_frame;
+        cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
+        memcpy(resized_buffer_720p, resized_frame.data, IMAGE_WIDTH * IMAGE_HEIGHT * 3);
+    }
+        Mat resized_frame(IMAGE_HEIGHT, IMAGE_WIDTH, CV_8UC3, resized_buffer_720p);
     
     detect_result_group_t detect_result_group;
-    //person_detect_run(personCtx, resized_frame, &detect_result_group);
+    person_detect_run(personCtx, resized_frame, &detect_result_group);
 
     // 在720p坐标系下构建检测结果（用于追踪）
     vector<Detection> dets;

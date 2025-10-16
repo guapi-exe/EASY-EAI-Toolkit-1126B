@@ -48,11 +48,13 @@ set(OpenCV_LIBS
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
+set(media_root     ${toolkit_root}/media)
 
 include (${algorithm_root}/person_detect/api.cmake)
 include (${algorithm_root}/face_detect/api.cmake)
 include (${common_root}/base64/api.cmake)
 include (${common_root}/json/api.cmake)
+include (${media_root}/rga/api.cmake)
 
 ## api头文件路径
 set(api_inc 
@@ -61,7 +63,8 @@ set(api_inc
     ${CJSON_INCLUDE_DIRS}
     ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
-    ${PERSON_DETECT_INCLUDE_DIRS} 
+    ${PERSON_DETECT_INCLUDE_DIRS}
+    ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/json
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/tinyekf
@@ -75,6 +78,7 @@ set(api_inc
 file(GLOB api_srcs 
     ${BASE64_SOURCE_DIRS} 
     ${CJSON_SOURCE_DIRS}
+    ${RGA_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp
@@ -94,6 +98,7 @@ link_directories(
 set(sysLib_list 
     ${BASE64_LIBS}
     ${CJSON_LIBS}
+    ${RGA_LIBS}
     ${PERSON_DETECT_LIBS} 
     ${FACE_DETECT_LIBS} 
     ${OpenCV_LIBS}

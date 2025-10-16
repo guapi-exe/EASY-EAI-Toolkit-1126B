@@ -51,4 +51,7 @@ private:
     std::chrono::steady_clock::time_point lastFPSUpdate;
     std::chrono::steady_clock::time_point startTime;
     long framesAtLastUpdate{0};
+    
+    // RGA硬件加速缓冲区
+    unsigned char* resized_buffer_720p{nullptr};
 };
