@@ -1,7 +1,9 @@
 #pragma once
 
-#define CAMERA_WIDTH    2560
-#define CAMERA_HEIGHT   1440
+#define CAMERA_WIDTH    3840
+#define CAMERA_HEIGHT   2160
+#define IMAGE_WIDTH     1280
+#define IMAGE_HEIGHT    720
 #define CAMERA_INDEX_1  22
 #define CAMERA_INDEX_2  51
 #define IMGRATIO        3

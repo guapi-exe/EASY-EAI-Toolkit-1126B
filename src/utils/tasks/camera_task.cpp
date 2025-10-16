@@ -135,17 +135,36 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
+    // 计算缩放比例: 3840x2160 -> 1280x720
+    float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
+    float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
+    
+    // 将原始4K图像缩放到720p用于推理
+    Mat resized_frame;
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
+    
+    // 在缩放后的图像上进行人体检测
     detect_result_group_t detect_result_group;
-    person_detect_run(personCtx, frame, &detect_result_group);
+    person_detect_run(personCtx, resized_frame, &detect_result_group);
 
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
         if (d.prop < 0.7) continue;
-        Rect roi(max(0,d.box.left), max(0,d.box.top),
-                 min(CAMERA_WIDTH-1,d.box.right)-max(0,d.box.left),
-                 min(CAMERA_HEIGHT-1,d.box.bottom)-max(0,d.box.top));
+        
+        // 将检测结果从720p映射回4K分辨率
+        int orig_left = static_cast<int>(d.box.left / scale_x);
+        int orig_top = static_cast<int>(d.box.top / scale_y);
+        int orig_right = static_cast<int>(d.box.right / scale_x);
+        int orig_bottom = static_cast<int>(d.box.bottom / scale_y);
+        
+        // 边界检查
+        Rect roi(max(0, orig_left), max(0, orig_top),
+                 min(CAMERA_WIDTH-1, orig_right) - max(0, orig_left),
+                 min(CAMERA_HEIGHT-1, orig_bottom) - max(0, orig_top));
         if (roi.width <=0 || roi.height <=0) continue;
+        
+        // 从原始4K图像中截取ROI
         Detection det; 
         det.roi = frame(roi).clone(); 
         det.x1 = roi.x; det.y1 = roi.y; 
@@ -159,10 +178,28 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     for (auto& t : tracks) {
         Rect bbox((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
         if (bbox.width <=0 || bbox.height <=0) continue;
+        
+        // 从原始4K图像中获取人体ROI
         Mat person_roi = frame(bbox).clone();
-
+        
+        // 将人体ROI缩放到较小尺寸进行人脸检测（提高速度）
+        Mat person_roi_resized;
+        int target_width = min(640, person_roi.cols);
+        int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
+        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
+        
         vector<det> face_result;
-        face_detect_run(faceCtx, person_roi, face_result);
+        face_detect_run(faceCtx, person_roi_resized, face_result);
+        
+        // 将人脸检测结果映射回原始person_roi尺寸
+        float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
+        float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
+        for (auto& face : face_result) {
+            face.box.left = static_cast<int>(face.box.left * face_scale_x);
+            face.box.top = static_cast<int>(face.box.top * face_scale_y);
+            face.box.right = static_cast<int>(face.box.right * face_scale_x);
+            face.box.bottom = static_cast<int>(face.box.bottom * face_scale_y);
+        }
 
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
