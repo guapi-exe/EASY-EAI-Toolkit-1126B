@@ -80,24 +80,27 @@ void CameraTask::run() {
             uploadCallback(img, id, type);
         }
     }, &capturedPersonIds, &capturedFaceIds);
-    /*
+    
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
         face_detect_release(faceCtx);
         return;
     }
-    */
-    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
+    
+   /*
+   if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
         face_detect_release(faceCtx);
         return;
     }
+   */
+    
 
     vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
-        if (usbcamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
+        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty()) continue;
         
@@ -115,7 +118,7 @@ void CameraTask::run() {
 
 void CameraTask::captureSnapshot() {
     std::vector<unsigned char> buffer(IMAGE_SIZE);
-    if (usbcamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
+    if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (!frame.empty()) {
             if (uploadCallback) {

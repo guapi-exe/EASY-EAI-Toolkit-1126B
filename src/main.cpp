@@ -36,7 +36,7 @@ int main() {
         commandManager.executeCommands();
     });
 
-    CameraTask camera("person_detect.model", "face_detect.model", CAMERA_INDEX_2);
+    CameraTask camera("person_detect.model", "face_detect.model", CAMERA_INDEX_1);
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type){
         if (type == "all")
         {
