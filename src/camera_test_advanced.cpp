@@ -5,6 +5,7 @@
 #include <atomic>
 #include <vector>
 #include <algorithm>
+#include <numeric>
 
 extern "C" {
 #include "log.h"
