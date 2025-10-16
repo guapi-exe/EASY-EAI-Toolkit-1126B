@@ -138,16 +138,16 @@ static void predict_track(Track& t) {
     t.bbox.width  = std::max(10.0f, t.ekf.x[2]);   // 防止宽度过小
     t.bbox.height = std::max(10.0f, t.ekf.x[3]);   // 防止高度过小
 
-    // 边界检查，防止bbox超出图像边界
-    t.bbox.x = std::max(0.0f, std::min((float)(CAMERA_WIDTH - t.bbox.width), t.bbox.x));
-    t.bbox.y = std::max(0.0f, std::min((float)(CAMERA_HEIGHT - t.bbox.height), t.bbox.y));
+    // 边界检查，防止bbox超出图像边界（现在使用720p坐标系）
+    t.bbox.x = std::max(0.0f, std::min((float)(IMAGE_WIDTH - t.bbox.width), t.bbox.x));
+    t.bbox.y = std::max(0.0f, std::min((float)(IMAGE_HEIGHT - t.bbox.height), t.bbox.y));
     
     // 确保bbox在图像范围内
-    if (t.bbox.x + t.bbox.width > CAMERA_WIDTH) {
-        t.bbox.width = CAMERA_WIDTH - t.bbox.x;
+    if (t.bbox.x + t.bbox.width > IMAGE_WIDTH) {
+        t.bbox.width = IMAGE_WIDTH - t.bbox.x;
     }
-    if (t.bbox.y + t.bbox.height > CAMERA_HEIGHT) {
-        t.bbox.height = CAMERA_HEIGHT - t.bbox.y;
+    if (t.bbox.y + t.bbox.height > IMAGE_HEIGHT) {
+        t.bbox.height = IMAGE_HEIGHT - t.bbox.y;
     }
 
     t.age++;
