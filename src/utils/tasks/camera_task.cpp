@@ -167,15 +167,12 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
-    // 计算缩放比例: 3840x2160 -> 1280x720
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
     
-    // 将原始4K图像缩放到720p用于推理
     Mat resized_frame;
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
     
-    // 在缩放后的图像上进行人体检测
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
@@ -202,11 +199,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         dets.push_back(det);
     }
 
-    // 在720p坐标系下进行追踪
     vector<Track> tracks = sort_update(dets);
 
     for (auto& t : tracks) {
-        // t.bbox 是720p坐标系下的边界框
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
         if (bbox_720p.width <=0 || bbox_720p.height <=0) continue;
         
@@ -216,7 +211,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         int orig_width = static_cast<int>(bbox_720p.width / scale_x);
         int orig_height = static_cast<int>(bbox_720p.height / scale_y);
         
-        // 边界检查（4K坐标系）
         orig_x = max(0, min(CAMERA_WIDTH - orig_width, orig_x));
         orig_y = max(0, min(CAMERA_HEIGHT - orig_height, orig_y));
         orig_width = min(CAMERA_WIDTH - orig_x, orig_width);
@@ -226,10 +220,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         Rect bbox_4k(orig_x, orig_y, orig_width, orig_height);
         
-        // 从4K原图中截取高质量person ROI
         Mat person_roi = frame(bbox_4k).clone();
         
-        // 将人体ROI缩放到较小尺寸进行人脸检测（提高速度）
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
@@ -262,15 +254,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
 
         if (t.is_approaching && !t.has_captured && !face_result.empty()) {
-            // 注意：t.bbox是720p坐标系，但我们用4K的person_roi计算面积
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             
-            // 计算人员在4K画面中的占比
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             
-            // 先检查面积，只有合适的面积才计算清晰度（减少计算量）
             if (area_ratio > 0.05f) {
-                // 只对符合条件的帧计算清晰度
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 
                 if (current_clarity > 100) {  // 清晰度阈值（需要根据实际情况调整）
