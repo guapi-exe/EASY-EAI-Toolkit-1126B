@@ -195,10 +195,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
         float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
         for (auto& face : face_result) {
-            face.box.left = static_cast<int>(face.box.left * face_scale_x);
-            face.box.top = static_cast<int>(face.box.top * face_scale_y);
-            face.box.right = static_cast<int>(face.box.right * face_scale_x);
-            face.box.bottom = static_cast<int>(face.box.bottom * face_scale_y);
+            face.box.x = static_cast<int>(face.box.x * face_scale_x);
+            face.box.y = static_cast<int>(face.box.y * face_scale_y);
+            face.box.width = static_cast<int>(face.box.width * face_scale_x);
+            face.box.height = static_cast<int>(face.box.height * face_scale_y);
         }
 
         if (t.bbox_history.size() >= 5) {
