@@ -302,9 +302,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
                         if (fbox.width > 0 && fbox.height > 0) {
                             Mat face_aligned = person_roi(fbox).clone();
-                            double face_clarity = computeFocusMeasure(face_aligned);
                             bool frontal = isFrontalFace(face_result[0].landmarks);
-                            if (face_clarity > 100 && frontal) {
+                            if (frontal) {
                                 float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
                                 float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
                                 double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
