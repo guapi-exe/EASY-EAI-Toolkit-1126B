@@ -77,8 +77,7 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
     float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
     float pitch = (mouth_center_y - eye_center_y) / dx;
-    log_debug("Face landmarks roll=%.2f, yaw=%.2f, pitch=%.2f", roll, yaw, pitch);
-    return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4) && (fabs(pitch) < 0.4);
+    return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4);
 }
 
 // -------------------- FPS计算 --------------------
@@ -313,7 +312,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         // 只对人脸也计算一次清晰度
                         double face_clarity = computeFocusMeasure(face_aligned);
                         bool frontal = isFrontalFace(face_result[0].landmarks);
-                        if (face_clarity > 100) {
+                        if (face_clarity > 100 && frontal) {
                             // 计算综合评分
                             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
                             float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
