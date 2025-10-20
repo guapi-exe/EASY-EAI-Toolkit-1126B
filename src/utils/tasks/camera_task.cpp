@@ -261,19 +261,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
-        
-        vector<det> face_result;
-        face_detect_run(faceCtx, person_roi_resized, face_result);
-        
-        // 将人脸检测结果映射回原始person_roi尺寸
-        float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
-        float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
-        for (auto& face : face_result) {
-            face.box.x = static_cast<int>(face.box.x * face_scale_x);
-            face.box.y = static_cast<int>(face.box.y * face_scale_y);
-            face.box.width = static_cast<int>(face.box.width * face_scale_x);
-            face.box.height = static_cast<int>(face.box.height * face_scale_y);
-        }
 
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
@@ -288,45 +275,48 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             }
         }
 
-        if (t.is_approaching && !t.has_captured && !face_result.empty()) {
+        if (t.is_approaching && !t.has_captured) {
             float current_area_4k = bbox_4k.width * bbox_4k.height;
-            
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
-            
             if (area_ratio > 0.05f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
-                
-                if (current_clarity > 100) { 
-                    // 处理人脸框
-                    Rect fbox = cv::Rect(face_result[0].box);
-                    int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
-                    int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
-                    fbox.x = std::max(0, fbox.x - w_expand);
-                    fbox.y = std::max(0, fbox.y - h_expand);
-                    fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-                    fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
-
-                    if (fbox.width > 0 && fbox.height > 0) {
-                        Mat face_aligned = person_roi(fbox).clone();
-                        
-                        // 只对人脸也计算一次清晰度
-                        double face_clarity = computeFocusMeasure(face_aligned);
-                        bool frontal = isFrontalFace(face_result[0].landmarks);
-                        if (face_clarity > 100 && frontal) {
-                            // 计算综合评分
-                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
-                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-                            double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
-                            
-                            Track::FrameData frame_data;
-                            frame_data.score = current_score;
-                            frame_data.person_roi = person_roi.clone();
-                            frame_data.face_roi = face_aligned.clone();
-                            frame_data.has_face = true;
-                            frame_data.clarity = current_clarity;
-                            frame_data.area_ratio = area_ratio;
-                            
-                            add_frame_candidate(t.id, frame_data);
+                if (current_clarity > 100) {
+                    std::vector<det> face_result;
+                    face_detect_run(faceCtx, person_roi_resized, face_result);
+                    float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
+                    float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
+                    for (auto& face : face_result) {
+                        face.box.x = static_cast<int>(face.box.x * face_scale_x);
+                        face.box.y = static_cast<int>(face.box.y * face_scale_y);
+                        face.box.width = static_cast<int>(face.box.width * face_scale_x);
+                        face.box.height = static_cast<int>(face.box.height * face_scale_y);
+                    }
+                    if (!face_result.empty()) {
+                        // 处理人脸框
+                        Rect fbox = cv::Rect(face_result[0].box);
+                        int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
+                        int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
+                        fbox.x = std::max(0, fbox.x - w_expand);
+                        fbox.y = std::max(0, fbox.y - h_expand);
+                        fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
+                        fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
+                        if (fbox.width > 0 && fbox.height > 0) {
+                            Mat face_aligned = person_roi(fbox).clone();
+                            double face_clarity = computeFocusMeasure(face_aligned);
+                            bool frontal = isFrontalFace(face_result[0].landmarks);
+                            if (face_clarity > 100 && frontal) {
+                                float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
+                                float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
+                                double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
+                                Track::FrameData frame_data;
+                                frame_data.score = current_score;
+                                frame_data.person_roi = person_roi.clone();
+                                frame_data.face_roi = face_aligned.clone();
+                                frame_data.has_face = true;
+                                frame_data.clarity = current_clarity;
+                                frame_data.area_ratio = area_ratio;
+                                add_frame_candidate(t.id, frame_data);
+                            }
                         }
                     }
                 }
