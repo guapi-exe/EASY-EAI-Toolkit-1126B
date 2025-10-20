@@ -111,6 +111,7 @@ set(sysLib_list
 
 set(solutions ${CMAKE_CURRENT_SOURCE_DIR}/../../Solutions)
 add_definitions(-DLOG_USE_COLOR)
+add_definitions(-lgpiod)
 
 #--------------------------
 # Main executable
