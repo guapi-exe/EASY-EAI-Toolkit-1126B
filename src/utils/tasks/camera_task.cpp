@@ -77,7 +77,7 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
     float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
     float pitch = (mouth_center_y - eye_center_y) / dx;
-
+    log_debug("Face landmarks roll=%.2f, yaw=%.2f, pitch=%.2f", roll, yaw, pitch);
     return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4) && (fabs(pitch) < 0.4);
 }
 
@@ -294,7 +294,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             
-            if (area_ratio > 0.02f) {
+            if (area_ratio > 0.05f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 
                 if (current_clarity > 100) { 
@@ -313,8 +313,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         // 只对人脸也计算一次清晰度
                         double face_clarity = computeFocusMeasure(face_aligned);
                         bool frontal = isFrontalFace(face_result[0].landmarks);
-                        log_debug("Track ID %d: area_ratio=%.4f, person_clarity=%.2f, face_clarity=%.2f, frontal=%d",
-                                  t.id, area_ratio, current_clarity, face_clarity, frontal ? 1 : 0);
                         if (face_clarity > 100) {
                             // 计算综合评分
                             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
