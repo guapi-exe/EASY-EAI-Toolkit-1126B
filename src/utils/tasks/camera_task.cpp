@@ -24,7 +24,6 @@ CameraTask::CameraTask(const string& personModel, const string& faceModel, int i
 CameraTask::~CameraTask() { 
     stop(); 
     
-    // 释放RGA资源
     if (resized_buffer_720p) {
         delete[] resized_buffer_720p;
         resized_buffer_720p = nullptr;
@@ -50,11 +49,7 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
     int scale_factor = 8;
-    if (img.cols > 2000 || img.rows > 2000) {
-        scale_factor = 8; 
-    }
     
-    // 方法1: 快速降采样+拉普拉斯（推荐，平衡速度和精度）
     Mat small, gray, lap;
     cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
     cvtColor(small, gray, COLOR_BGR2GRAY);
@@ -62,29 +57,28 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     Scalar mean_val, stddev_val;
     meanStdDev(lap, mean_val, stddev_val);
     return stddev_val.val[0] * stddev_val.val[0];
-    
-    /* 方法2: Sobel梯度均值（更快，推荐用于人脸）
-    Mat small, gray, grad_x, grad_y;
-    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
-    cvtColor(small, gray, COLOR_BGR2GRAY);
-    Sobel(gray, grad_x, CV_16S, 1, 0, 3);
-    Sobel(gray, grad_y, CV_16S, 0, 1, 3);
-    Mat abs_grad_x, abs_grad_y;
-    convertScaleAbs(grad_x, abs_grad_x);
-    convertScaleAbs(grad_y, abs_grad_y);
-    Mat grad;
-    addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad);
-    return mean(grad)[0];
-    */
-    
-    /* 方法3: 灰度方差（最快，可用于快速过滤）
-    Mat small, gray;
-    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
-    cvtColor(small, gray, COLOR_BGR2GRAY);
-    Scalar mean_val, stddev_val;
-    meanStdDev(gray, mean_val, stddev_val);
-    return stddev_val.val[0] * stddev_val.val[0];
-    */
+}
+
+bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
+    if (landmarks.size() != 5) return false;
+    cv::Point2f left_eye = landmarks[0];
+    cv::Point2f right_eye = landmarks[1];
+    cv::Point2f nose = landmarks[2];
+    cv::Point2f left_mouth = landmarks[3];
+    cv::Point2f right_mouth = landmarks[4];
+
+    float dx = right_eye.x - left_eye.x;
+    float dy = right_eye.y - left_eye.y;
+    float roll = atan2(dy, dx) * 180.0 / CV_PI;
+
+    float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
+    float yaw = (nose.x - eye_center_x) / dx;
+
+    float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
+    float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
+    float pitch = (mouth_center_y - eye_center_y) / dx;
+
+    return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4) && (fabs(pitch) < 0.4);
 }
 
 // -------------------- FPS计算 --------------------
@@ -267,7 +261,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
-        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
+        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
         
         vector<det> face_result;
         face_detect_run(faceCtx, person_roi_resized, face_result);
@@ -300,10 +294,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             
-            if (area_ratio > 0.05f) {
+            if (area_ratio > 0.02f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 
-                if (current_clarity > 100) {  // 清晰度阈值（需要根据实际情况调整）
+                if (current_clarity > 100) { 
                     // 处理人脸框
                     Rect fbox = cv::Rect(face_result[0].box);
                     int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
@@ -318,14 +312,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         
                         // 只对人脸也计算一次清晰度
                         double face_clarity = computeFocusMeasure(face_aligned);
-                        
+                        bool frontal = isFrontalFace(face_result[0].landmarks);
+                        log_debug("Track ID %d: area_ratio=%.4f, person_clarity=%.2f, face_clarity=%.2f, frontal=%d",
+                                  t.id, area_ratio, current_clarity, face_clarity, frontal ? 1 : 0);
                         if (face_clarity > 100) {
                             // 计算综合评分
                             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
                             float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
                             double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
                             
-                            // 创建候选帧数据并通过接口添加到 person_sort.cpp 中的原始 tracks
                             Track::FrameData frame_data;
                             frame_data.score = current_score;
                             frame_data.person_roi = person_roi.clone();
