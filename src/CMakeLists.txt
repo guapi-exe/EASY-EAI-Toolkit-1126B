@@ -105,6 +105,7 @@ set(sysLib_list
     ${FACE_DETECT_LIBS} 
     ${OpenCV_LIBS}
     rga 
+    gpiod
     rockchip_mpp
     )
 
