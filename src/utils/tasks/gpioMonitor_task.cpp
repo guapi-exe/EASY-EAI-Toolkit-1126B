@@ -1,3 +1,4 @@
+#include "gpioMonitor_task.h"
 #include <atomic>
 #include <thread>
 #include <chrono>
