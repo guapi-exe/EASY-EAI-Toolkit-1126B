@@ -29,7 +29,7 @@ int main() {
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
     SerialTask serial("/dev/ttyS2", 115200);
-    GPIOMonitorTask gpioMonitor("GPIO0_A5");
+    GPIOMonitorTask gpioMonitor("GPIO5_C1");
     uploader.start();
     
     heartbeat.updateData(hbData);

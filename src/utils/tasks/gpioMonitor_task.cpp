@@ -26,19 +26,11 @@ public:
         if (gpioInitialized_) return;
         static const GPIOCfg_t gpioCfg_tab[] = {
             {
-                .pinName   = "GPIO0_A0",
+                .pinName   = "GPIO5_C0",
                 .direction = DIR_OUTPUT,
                 .val       = 0,
             }, {
-                .pinName   = "GPIO0_A5",
-                .direction = DIR_INPUT,
-                .val       = 0,
-            }, {
-                .pinName   = "GPIO1_C4",
-                .direction = DIR_OUTPUT,
-                .val       = 0,
-            }, {
-                .pinName   = "GPIO1_C5",
+                .pinName   = "GPIO5_C1",
                 .direction = DIR_INPUT,
                 .val       = 0,
             }
