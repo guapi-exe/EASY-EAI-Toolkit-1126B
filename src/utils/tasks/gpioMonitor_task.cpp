@@ -61,7 +61,7 @@ void GPIOMonitorTask::run() {
         if (val == 0) {
             lowCount++;
             if (lowCount >= sleepThreshold) {
-                log_debug("系统休眠\n");
+                log_debug("系统休眠");
                 system("echo freeze > /sys/power/state");
                 break;
             }
