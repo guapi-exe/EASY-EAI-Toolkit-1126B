@@ -1,5 +1,6 @@
 #pragma once
 
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #define CAMERA_WIDTH    3840
 #define CAMERA_HEIGHT   2160
 #define IMAGE_WIDTH     1280

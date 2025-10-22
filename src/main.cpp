@@ -5,6 +5,7 @@
 #include "serial_task.h"
 #include "heartbeat_task.h"
 #include "command_manager.h"
+#include "gpioMonitor_task.h"
 #include <csignal> 
 #include <unistd.h>
 #include <sys/select.h>
@@ -28,6 +29,7 @@ int main() {
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
     SerialTask serial("/dev/ttyS2", 115200);
+    GPIOMonitorTask gpioMonitor("GPIO0_A5");
     uploader.start();
     
     heartbeat.updateData(hbData);
@@ -68,6 +70,7 @@ int main() {
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
     tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
     tm.addTask("SerialTask", [&](){ serial.start(); }, 10, std::chrono::seconds(1), true);
+    tm.addTask("GPIOMonitorTask", [&](){ gpioMonitor.start(true); }, 10, std::chrono::seconds(1), true);
     tm.startAll();
 
     std::signal(SIGINT, handleSignal);
@@ -76,24 +79,6 @@ int main() {
 
     while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        fd_set set;
-        struct timeval timeout;
-        FD_ZERO(&set);
-        FD_SET(STDIN_FILENO, &set);
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 0;
-        int rv = select(STDIN_FILENO + 1, &set, NULL, NULL, &timeout);
-
-        if (rv > 0 && FD_ISSET(STDIN_FILENO, &set)) {
-            char buf[256] = {0};
-            ssize_t len = read(STDIN_FILENO, buf, sizeof(buf) - 1);
-            if (len > 0) {
-                buf[len] = '\0';
-                serial.send(buf);
-                log_info("Main: Sent to serial: %s", buf);
-            }
-        }
     }
 
     log_info("System shutting down...");
