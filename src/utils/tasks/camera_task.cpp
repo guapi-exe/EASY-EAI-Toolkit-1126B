@@ -48,7 +48,7 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
-    int scale_factor = 8;
+    int scale_factor = 2;
     
     Mat small, gray, lap;
     cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
