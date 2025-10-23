@@ -280,7 +280,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             if (area_ratio > 0.05f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
-                if (current_clarity > 100) {
+                if (current_clarity > 50) {
                     std::vector<det> face_result;
                     face_detect_run(faceCtx, person_roi_resized, face_result);
                     float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
