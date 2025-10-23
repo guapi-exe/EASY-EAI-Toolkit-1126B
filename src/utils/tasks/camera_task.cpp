@@ -294,8 +294,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     if (!face_result.empty()) {
                         // 处理人脸框
                         Rect fbox = cv::Rect(face_result[0].box);
-                        int w_expand = static_cast<int>(fbox.width * 0.5 / 2.0);
-                        int h_expand = static_cast<int>(fbox.height * 0.5 / 2.0);
+                        int w_expand = static_cast<int>(fbox.width * 1.0 / 2.0);
+                        int h_expand = static_cast<int>(fbox.height * 1.0 / 2.0);
                         fbox.x = std::max(0, fbox.x - w_expand);
                         fbox.y = std::max(0, fbox.y - h_expand);
                         fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
