@@ -18,7 +18,7 @@ echo "Current working directory: $(pwd)"
 rm -rf build
 mkdir build
 cd build
-cmake ..
+cmake -D ENABLE_FAST_MATH=ON -D WITH_TBB=ON -D WITH_OPENCL=ON -D ENABLE_NEON=ON -D ENABLE_AVX=ON .. 
 make -j$(nproc)
 
 # release
