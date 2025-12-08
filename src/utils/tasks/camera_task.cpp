@@ -258,9 +258,22 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         Mat person_roi = frame(bbox_4k).clone();
         
+        if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
+            log_error("Invalid person_roi: empty=%d, cols=%d, rows=%d", 
+                      person_roi.empty(), person_roi.cols, person_roi.rows);
+            continue;
+        }
+        
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
+        
+        if (target_width <= 0 || target_height <= 0) {
+            log_error("Invalid resize target: width=%d, height=%d (src: %dx%d)", 
+                      target_width, target_height, person_roi.cols, person_roi.rows);
+            continue;
+        }
+        
         log_info("Test2");
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
         log_info("Test2");
