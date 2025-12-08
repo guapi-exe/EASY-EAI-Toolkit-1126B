@@ -210,7 +210,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     Mat resized_frame;
     log_info("Test");
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
-
+    log_info("Test");
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
