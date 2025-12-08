@@ -48,10 +48,27 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
+    // 安全检查
+    if (img.empty() || img.cols < 2 || img.rows < 2) {
+        log_error("computeFocusMeasure: Invalid image size: %dx%d", img.cols, img.rows);
+        return 0.0;
+    }
+    
     int scale_factor = 2;
+    int new_width = img.cols / scale_factor;
+    int new_height = img.rows / scale_factor;
+    
+    if (new_width <= 0 || new_height <= 0) {
+        Mat gray, lap;
+        cvtColor(img, gray, COLOR_BGR2GRAY);
+        Laplacian(gray, lap, CV_64F);
+        Scalar mean_val, stddev_val;
+        meanStdDev(lap, mean_val, stddev_val);
+        return stddev_val.val[0] * stddev_val.val[0];
+    }
     
     Mat small, gray, lap;
-    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
+    cv::resize(img, small, Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
     cvtColor(small, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
     Scalar mean_val, stddev_val;
@@ -208,9 +225,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
-    log_info("Test");
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
-    log_info("Test");
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
@@ -274,9 +289,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             continue;
         }
         
-        log_info("Test2");
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
-        log_info("Test2");
 
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
