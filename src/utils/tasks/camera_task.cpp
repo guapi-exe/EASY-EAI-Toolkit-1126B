@@ -48,7 +48,6 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
-    // 安全检查
     if (img.empty() || img.cols < 2 || img.rows < 2) {
         log_error("computeFocusMeasure: Invalid image size: %dx%d", img.cols, img.rows);
         return 0.0;
@@ -68,6 +67,7 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     }
     
     Mat small, gray, lap;
+    log_info("computeFocusMeasure resize: %dx%d -> %dx%d", img.cols, img.rows, new_width, new_height);
     cv::resize(img, small, Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
     cvtColor(small, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
@@ -300,6 +300,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             continue;
         }
         
+        log_info("person_roi resize: %dx%d -> %dx%d", person_roi.cols, person_roi.rows, target_width, target_height);
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
 
         if (t.bbox_history.size() >= 5) {
