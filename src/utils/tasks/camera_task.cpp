@@ -97,7 +97,6 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4);
 }
 
-// -------------------- FPS计算 --------------------
 void CameraTask::updateFPS() {
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastFPSUpdate);
@@ -236,7 +235,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         log_error("Invalid target size: IMAGE_WIDTH=%d, IMAGE_HEIGHT=%d", IMAGE_WIDTH, IMAGE_HEIGHT);
         return;
     }
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    //cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
 
