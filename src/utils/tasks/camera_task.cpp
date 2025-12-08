@@ -261,7 +261,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
+        log_info("Test2");
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
+        log_info("Test2");
 
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
