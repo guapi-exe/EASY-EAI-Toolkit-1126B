@@ -225,6 +225,17 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
+    // 调试：打印帧信息和目标尺寸
+    log_info("resize: frame=%dx%d, target=%dx%d, empty=%d, data=%p", 
+             frame.cols, frame.rows, IMAGE_WIDTH, IMAGE_HEIGHT, frame.empty(), frame.data);
+    if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
+        log_error("Invalid frame before resize!");
+        return;
+    }
+    if (IMAGE_WIDTH <= 0 || IMAGE_HEIGHT <= 0) {
+        log_error("Invalid target size: IMAGE_WIDTH=%d, IMAGE_HEIGHT=%d", IMAGE_WIDTH, IMAGE_HEIGHT);
+        return;
+    }
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
