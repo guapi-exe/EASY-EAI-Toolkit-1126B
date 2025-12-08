@@ -235,9 +235,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         log_error("Invalid target size: IMAGE_WIDTH=%d, IMAGE_HEIGHT=%d", IMAGE_WIDTH, IMAGE_HEIGHT);
         return;
     }
-    //cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
     detect_result_group_t detect_result_group;
-    person_detect_run(personCtx, resized_frame, &detect_result_group);
+    //person_detect_run(personCtx, resized_frame, &detect_result_group);
 
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
