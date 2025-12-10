@@ -48,27 +48,10 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
-    if (img.empty() || img.cols < 2 || img.rows < 2) {
-        log_error("computeFocusMeasure: Invalid image size: %dx%d", img.cols, img.rows);
-        return 0.0;
-    }
-    
     int scale_factor = 2;
-    int new_width = img.cols / scale_factor;
-    int new_height = img.rows / scale_factor;
-    
-    if (new_width <= 0 || new_height <= 0) {
-        Mat gray, lap;
-        cvtColor(img, gray, COLOR_BGR2GRAY);
-        Laplacian(gray, lap, CV_64F);
-        Scalar mean_val, stddev_val;
-        meanStdDev(lap, mean_val, stddev_val);
-        return stddev_val.val[0] * stddev_val.val[0];
-    }
     
     Mat small, gray, lap;
-    log_info("computeFocusMeasure resize: %dx%d -> %dx%d", img.cols, img.rows, new_width, new_height);
-    cv::resize(img, small, Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
+    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
     cvtColor(small, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
     Scalar mean_val, stddev_val;
@@ -97,6 +80,7 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4);
 }
 
+// -------------------- FPS计算 --------------------
 void CameraTask::updateFPS() {
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastFPSUpdate);
@@ -224,20 +208,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
-    // 调试：打印帧信息和目标尺寸
-    log_info("resize: frame=%dx%d, target=%dx%d, empty=%d, data=%p", 
-             frame.cols, frame.rows, IMAGE_WIDTH, IMAGE_HEIGHT, frame.empty(), frame.data);
-    if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
-        log_error("Invalid frame before resize!");
-        return;
-    }
-    if (IMAGE_WIDTH <= 0 || IMAGE_HEIGHT <= 0) {
-        log_error("Invalid target size: IMAGE_WIDTH=%d, IMAGE_HEIGHT=%d", IMAGE_WIDTH, IMAGE_HEIGHT);
-        return;
-    }
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+
     detect_result_group_t detect_result_group;
-    //person_detect_run(personCtx, resized_frame, &detect_result_group);
+    person_detect_run(personCtx, resized_frame, &detect_result_group);
 
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
@@ -249,7 +223,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                       min(IMAGE_HEIGHT-1, d.box.bottom) - max(0, d.box.top));
         if (roi_720p.width <=0 || roi_720p.height <=0) continue;
         
-        // 使用720p图像的ROI用于直方图计算（追踪用）
         Detection det; 
         det.roi = resized_frame(roi_720p); 
         det.x1 = roi_720p.x; 
@@ -283,23 +256,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         Mat person_roi = frame(bbox_4k).clone();
         
-        if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
-            log_error("Invalid person_roi: empty=%d, cols=%d, rows=%d", 
-                      person_roi.empty(), person_roi.cols, person_roi.rows);
-            continue;
-        }
-        
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
-        
-        if (target_width <= 0 || target_height <= 0) {
-            log_error("Invalid resize target: width=%d, height=%d (src: %dx%d)", 
-                      target_width, target_height, person_roi.cols, person_roi.rows);
-            continue;
-        }
-        
-        log_info("person_roi resize: %dx%d -> %dx%d", person_roi.cols, person_roi.rows, target_width, target_height);
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
 
         if (t.bbox_history.size() >= 5) {
