@@ -17,7 +17,9 @@ CameraTask::CameraTask(const string& personModel, const string& faceModel, int i
     startTime = std::chrono::steady_clock::now();
     lastFPSUpdate = startTime;
     
-    rga_init();
+    // 注意: rga_init()已在mipi_camera.c的mipicamera_init()中调用(c_RkRgaInit)
+    // 重复初始化可能导致问题，因此这里注释掉
+    // rga_init();
     resized_buffer_720p = new unsigned char[IMAGE_WIDTH * IMAGE_HEIGHT * 3];
 }
 
@@ -28,7 +30,7 @@ CameraTask::~CameraTask() {
         delete[] resized_buffer_720p;
         resized_buffer_720p = nullptr;
     }
-    rga_unInit();
+    // rga_unInit(); // 对应rga_init()注释
 }
 
 void CameraTask::start() {
@@ -148,9 +150,25 @@ void CameraTask::run() {
     
 
     vector<unsigned char> buffer(IMAGE_SIZE);
+    bool firstFrame = true;
     while (running) {
-        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
+        int ret = mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data()));
+        if (ret != 0) {
+            log_error("CameraTask: mipicamera_getframe failed with code %d", ret);
+            continue;
+        }
+        
+        // 用实际相机尺寸创建Mat，而不是期望的尺寸
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        
+        if (firstFrame) {
+            log_info("First frame: cols=%d, rows=%d, channels=%d, total=%zu, data=%p", 
+                     frame.cols, frame.rows, frame.channels(), frame.total(), (void*)frame.data);
+            log_info("Expected: CAMERA_WIDTH=%d, CAMERA_HEIGHT=%d, IMAGE_SIZE=%d", 
+                     CAMERA_WIDTH, CAMERA_HEIGHT, IMAGE_SIZE);
+            firstFrame = false;
+        }
+        
         if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
             log_error("CameraTask: invalid frame dimensions (width=%d, height=%d)", frame.cols, frame.rows);
             continue;
@@ -160,6 +178,7 @@ void CameraTask::run() {
         totalFrames++;
         updateFPS();
         
+        log_debug("Processing frame %ld: %dx%d", totalFrames.load(), frame.cols, frame.rows);
         processFrame(frame, personCtx, faceCtx);
     }
 
@@ -187,6 +206,12 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
+    // 验证输入frame有效性
+    if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
+        log_error("processFrame: invalid input frame (cols=%d, rows=%d)", frame.cols, frame.rows);
+        return;
+    }
+    
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
     
@@ -221,11 +246,40 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     Mat resized_frame(IMAGE_HEIGHT, IMAGE_WIDTH, CV_8UC3, resized_buffer_720p);
     */
     
+    // 验证resize目标尺寸有效性
+    if (IMAGE_WIDTH <= 0 || IMAGE_HEIGHT <= 0) {
+        log_error("processFrame: invalid target size (IMAGE_WIDTH=%d, IMAGE_HEIGHT=%d)", IMAGE_WIDTH, IMAGE_HEIGHT);
+        return;
+    }
+    
     Mat resized_frame;
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    try {
+        log_debug("Resizing frame from %dx%d to %dx%d", frame.cols, frame.rows, IMAGE_WIDTH, IMAGE_HEIGHT);
+        cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    } catch (const cv::Exception& e) {
+        log_error("cv::resize exception: %s", e.what());
+        return;
+    }
+    
+    if (resized_frame.empty()) {
+        log_error("processFrame: resize failed, result is empty");
+        return;
+    }
+    
+    log_debug("Resize successful: %dx%d", resized_frame.cols, resized_frame.rows);
 
     detect_result_group_t detect_result_group;
-    person_detect_run(personCtx, resized_frame, &detect_result_group);
+    try {
+        log_debug("Calling person_detect_run...");
+        person_detect_run(personCtx, resized_frame, &detect_result_group);
+        log_debug("person_detect_run completed, count=%d", detect_result_group.count);
+    } catch (const cv::Exception& e) {
+        log_error("person_detect_run cv::Exception: %s", e.what());
+        return;
+    } catch (const std::exception& e) {
+        log_error("person_detect_run std::exception: %s", e.what());
+        return;
+    }
 
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
