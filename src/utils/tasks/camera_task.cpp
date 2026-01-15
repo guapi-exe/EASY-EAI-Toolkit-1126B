@@ -48,10 +48,21 @@ void CameraTask::setUploadCallback(UploadCallback cb) {
 
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
+    if (img.empty() || img.cols <= 0 || img.rows <= 0) {
+        return 0.0;
+    }
+    
     int scale_factor = 2;
     
+    // 确保缩放后尺寸有效
+    int new_width = img.cols / scale_factor;
+    int new_height = img.rows / scale_factor;
+    if (new_width <= 0 || new_height <= 0) {
+        return 0.0;
+    }
+    
     Mat small, gray, lap;
-    cv::resize(img, small, Size(img.cols/scale_factor, img.rows/scale_factor), 0, 0, cv::INTER_LINEAR);
+    cv::resize(img, small, Size(new_width, new_height), 0, 0, cv::INTER_LINEAR);
     cvtColor(small, gray, COLOR_BGR2GRAY);
     Laplacian(gray, lap, CV_64F);
     Scalar mean_val, stddev_val;
@@ -140,7 +151,10 @@ void CameraTask::run() {
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
-        if (frame.empty()) continue;
+        if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
+            log_error("CameraTask: invalid frame dimensions (width=%d, height=%d)", frame.cols, frame.rows);
+            continue;
+        }
         
         // 帧数统计
         totalFrames++;
@@ -256,9 +270,20 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         Mat person_roi = frame(bbox_4k).clone();
         
+        // 验证ROI尺寸，避免resize时出错
+        if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
+            continue;
+        }
+        
         Mat person_roi_resized;
         int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
+        
+        // 确保目标尺寸有效
+        if (target_width <= 0 || target_height <= 0) {
+            continue;
+        }
+        
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
 
         if (t.bbox_history.size() >= 5) {
