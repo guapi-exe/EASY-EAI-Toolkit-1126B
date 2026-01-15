@@ -88,7 +88,21 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
     float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
     float pitch = (mouth_center_y - eye_center_y) / dx;
-    return (fabs(roll) < 40.0) && (fabs(yaw) < 0.4);
+    // 正脸标准
+    return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
+}
+
+// 新增：判断是否为侧脸
+bool CameraTask::isSideFace(const std::vector<cv::Point2f>& landmarks) {
+    if (landmarks.size() != 5) return false;
+    cv::Point2f left_eye = landmarks[0];
+    cv::Point2f right_eye = landmarks[1];
+    cv::Point2f nose = landmarks[2];
+    float dx = right_eye.x - left_eye.x;
+    float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
+    float yaw = (nose.x - eye_center_x) / dx;
+    // 侧脸标准
+    return (fabs(yaw) >= 0.25 && fabs(yaw) < 0.6);
 }
 
 // -------------------- FPS计算 --------------------
@@ -327,19 +341,28 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         if (fbox.width > 0 && fbox.height > 0) {
                             Mat face_aligned = person_roi(fbox).clone();
                             bool frontal = isFrontalFace(face_result[0].landmarks);
+                            bool side = isSideFace(face_result[0].landmarks);
+                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
+                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
+                            double current_score = 0.0;
                             if (frontal) {
-                                float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
-                                float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-                                double current_score = current_clarity * 0.5 + area_score * 1000 * 0.5;
-                                Track::FrameData frame_data;
-                                frame_data.score = current_score;
-                                frame_data.person_roi = person_roi.clone();
-                                frame_data.face_roi = face_aligned.clone();
-                                frame_data.has_face = true;
-                                frame_data.clarity = current_clarity;
-                                frame_data.area_ratio = area_ratio;
-                                add_frame_candidate(t.id, frame_data);
+                                // 正脸高分
+                                current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
+                            } else if (side) {
+                                // 侧脸低分
+                                current_score = current_clarity * 0.3 + area_score * 1000 * 0.1;
+                            } else {
+                                // 背面或极端侧脸直接丢弃
+                                continue;
                             }
+                            Track::FrameData frame_data;
+                            frame_data.score = current_score;
+                            frame_data.person_roi = person_roi.clone();
+                            frame_data.face_roi = face_aligned.clone();
+                            frame_data.has_face = true;
+                            frame_data.clarity = current_clarity;
+                            frame_data.area_ratio = area_ratio;
+                            add_frame_candidate(t.id, frame_data);
                         }
                     }
                 }
