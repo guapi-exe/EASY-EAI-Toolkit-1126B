@@ -33,6 +33,7 @@ private:
     double computeFocusMeasure(const cv::Mat& img);
     bool isFrontalFace(const std::vector<cv::Point2f>& landmarks);
     bool isSideFace(const std::vector<cv::Point2f>& landmarks);
+    int getFaceQuality(const std::vector<cv::Point2f>& landmarks, float score, const cv::Rect_<float>& box);
     void processFrame(const cv::Mat& frame, rknn_context personCtx, rknn_context faceCtx);
     void updateFPS(); // 更新FPS计算
     
