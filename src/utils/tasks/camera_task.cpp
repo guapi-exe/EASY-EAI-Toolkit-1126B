@@ -83,11 +83,6 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
 
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-
-    // float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
-    // float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
-    // float pitch = (mouth_center_y - eye_center_y) / dx;  // 未使用，已注释
-    // 正脸标准
     return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
 }
 
@@ -241,7 +236,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
 
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
@@ -249,7 +244,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
-        if (d.prop < 0.7) continue;
+        if (d.prop < PERSON_DETECT_THRESH) continue;
         
         Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
                       min(IMAGE_WIDTH-1, d.box.right) - max(0, d.box.left),
@@ -295,7 +290,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
         
         Mat person_roi_resized;
-        int target_width = min(640, person_roi.cols);
+        int target_width = min(PERSON_ROI_MAX_WIDTH, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
         
         // 确保目标尺寸有效
@@ -321,9 +316,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (t.is_approaching && !t.has_captured) {
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
-            if (area_ratio > 0.05f) {
+            if (area_ratio > FACE_AREA_RATIO_MIN) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
-                if (current_clarity > 50) {
+                if (current_clarity > FACE_CLARITY_THRESH) {
                     // 使用 RetinaFace 检测人脸
                     std::vector<RetinaFaceResult> face_result;
                     int num_faces = face_detect_retian_run(faceCtx, person_roi_resized, face_result, 
@@ -391,6 +386,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                             add_frame_candidate(t.id, frame_data);
                         }
                     }
+                    // 注意：如果 num_faces == 0，不会添加候选帧，因此不会上传无人脸的图片
                 }
             }
         }
