@@ -17,5 +17,5 @@
 #define RETIAN_MODEL_TYPE   0 
 #define RETIAN_INPUT_H      480
 #define RETIAN_INPUT_W      640
-#define RETIAN_CONF_THRESH  0.7f
+#define RETIAN_CONF_THRESH  0.8f
 #define RETIAN_NMS_THRESH   0.4f
