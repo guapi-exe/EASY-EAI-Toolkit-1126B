@@ -109,6 +109,7 @@ set(face_detect_scrfd_srcs
 link_directories(
    ${FACE_DETECT_LIBS_DIRS} 
    ${FACE_DETECT_RETIAN_LIBS_DIRS}
+   ${FACE_DETECT_SCRFD_LIBS_DIRS}
    ${PERSON_DETECT_LIBS_DIRS} 
 )
 ## 依赖的动态库文件
