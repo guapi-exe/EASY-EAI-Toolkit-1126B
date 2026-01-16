@@ -53,6 +53,7 @@ set(media_root     ${toolkit_root}/media)
 include (${algorithm_root}/person_detect/api.cmake)
 include (${algorithm_root}/face_detect/api.cmake)
 include (${algorithm_root}/face_detect_retian/api.cmake)
+include (${algorithm_root}/face_detect_scrfd/api.cmake)
 include (${common_root}/base64/api.cmake)
 include (${common_root}/json/api.cmake)
 include (${media_root}/rga/api.cmake)
@@ -65,6 +66,7 @@ set(api_inc
     ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${FACE_DETECT_RETIAN_INCLUDE_DIRS}
+    ${face_detect_scrfd_includes}
     ${PERSON_DETECT_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
@@ -93,9 +95,14 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
 )
 
-# RetinaFace 源文件（仅用于 camera_test_retian）
+# RetinaFace 源文件
 set(face_detect_retian_srcs
     ${algorithm_root}/face_detect_retian/face_detect_retian.cpp
+)
+
+# SCRFD 源文件
+set(face_detect_scrfd_srcs
+    ${algorithm_root}/face_detect_scrfd/face_detect_scrfd.cpp
 )
 
 ## api静态库文件路径
@@ -156,3 +163,11 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 #add_executable(${camera_test_retian_name} camera_test_retian.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
 #target_link_libraries(${camera_test_retian_name} ${retian_lib_list} ${CURL_LIBRARIES})
 #target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
+
+#--------------------------
+# Camera Test SCRFD executable
+#--------------------------
+set(camera_test_scrfd_name camera_test_scrfd)
+add_executable(${camera_test_scrfd_name} camera_test_scrfd.cpp ${face_detect_scrfd_srcs} ${api_srcs} ${common_api_srcs})
+target_link_libraries(${camera_test_scrfd_name} ${sysLib_list} ${CURL_LIBRARIES})
+target_include_directories(${camera_test_scrfd_name} PRIVATE ${api_inc})
