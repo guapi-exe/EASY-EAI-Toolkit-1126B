@@ -98,11 +98,11 @@ file(GLOB api_srcs
 # RetinaFace 源文件
 set(face_detect_retian_srcs
     ${algorithm_root}/face_detect_retian/face_detect_retian.cpp
+    ${algorithm_root}/face_detect_scrfd/face_detect_scrfd.cpp
 )
 
 # SCRFD 源文件
 set(face_detect_scrfd_srcs
-    ${algorithm_root}/face_detect_scrfd/face_detect_scrfd.cpp
 )
 
 ## api静态库文件路径
@@ -169,6 +169,6 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 # Camera Test SCRFD executable
 #--------------------------
 set(camera_test_scrfd_name camera_test_scrfd)
-add_executable(${camera_test_scrfd_name} camera_test_scrfd.cpp ${face_detect_scrfd_srcs} ${api_srcs} ${common_api_srcs})
+add_executable(${camera_test_scrfd_name} camera_test_scrfd.cpp ${face_detect_scrfd_srcs} ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
 target_link_libraries(${camera_test_scrfd_name} ${retian_lib_list} ${CURL_LIBRARIES})
 target_include_directories(${camera_test_scrfd_name} PRIVATE ${api_inc})
