@@ -77,63 +77,26 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     cv::Point2f left_mouth = landmarks[3];
     cv::Point2f right_mouth = landmarks[4];
 
-    // 1. 计算 roll 角（头部倾斜）
     float dx = right_eye.x - left_eye.x;
     float dy = right_eye.y - left_eye.y;
     float roll = atan2(dy, dx) * 180.0 / CV_PI;
-    
-    // 防止除零错误
-    if (fabs(dx) < 1e-6) return false;
 
-    // 2. 计算 yaw 角（水平旋转）
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-    
-    // 3. 计算 pitch 角（俯仰角）
-    float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
-    float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
-    float pitch = (mouth_center_y - eye_center_y) / fabs(dx);
-    
-    // 4. 检查眼睛间距（过小说明是侧脸）
-    float eye_distance = sqrt(dx * dx + dy * dy);
-    float face_width = fabs(right_eye.x - left_mouth.x) + fabs(left_eye.x - right_mouth.x);
-    float eye_distance_ratio = eye_distance / (face_width + 1e-6f);
-    
-    // 5. 检查嘴巴对称性（相对于眼睛中心）
-    float mouth_center_x = (left_mouth.x + right_mouth.x) / 2.0;
-    float mouth_symmetry = fabs(mouth_center_x - eye_center_x) / (fabs(dx) + 1e-6f);
-    
-    // 6. 检查鼻子位置（应在眼睛和嘴巴之间）
-    bool nose_between_eyes_mouth = (nose.y > eye_center_y) && (nose.y < mouth_center_y);
-    
-    // 综合判断（更严格的标准）
-    bool is_frontal = 
-        (fabs(roll) < FACE_ROLL_THRESH) &&          // roll 角小于 15°
-        (fabs(yaw) < FACE_YAW_THRESH) &&            // yaw 角小于 0.2
-        (fabs(pitch) < FACE_PITCH_THRESH) &&        // pitch 角合理
-        (eye_distance_ratio > FACE_EYE_DISTANCE_MIN) && // 眼睛间距足够
-        (mouth_symmetry < FACE_SYMMETRY_THRESH) &&  // 嘴巴对称
-        nose_between_eyes_mouth;                     // 鼻子位置合理
-        
-    return is_frontal;
+    return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
 }
 
-// 新增：判断是否为侧脸（更严格的判断）
+// 新增：判断是否为侧脸
 bool CameraTask::isSideFace(const std::vector<cv::Point2f>& landmarks) {
     if (landmarks.size() != 5) return false;
     cv::Point2f left_eye = landmarks[0];
     cv::Point2f right_eye = landmarks[1];
     cv::Point2f nose = landmarks[2];
-    
     float dx = right_eye.x - left_eye.x;
-    if (fabs(dx) < 1e-6) return false; // 避免除零
-    
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-    
-    // 侧脸标准：yaw 在 0.2-0.6 之间
-    // 超过 0.6 认为是背面或极端侧脸
-    return (fabs(yaw) >= FACE_YAW_THRESH && fabs(yaw) < 0.6);
+    // 侧脸标准
+    return (fabs(yaw) >= 0.25 && fabs(yaw) < 0.6);
 }
 
 // -------------------- FPS计算 --------------------
@@ -273,7 +236,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
 
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
@@ -281,7 +244,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Detection> dets;
     for (int i=0; i<detect_result_group.count; i++) {
         detect_result_t& d = detect_result_group.results[i];
-        if (d.prop < PERSON_DETECT_THRESH) continue;
+        if (d.prop < 0.7) continue;
         
         Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
                       min(IMAGE_WIDTH-1, d.box.right) - max(0, d.box.left),
@@ -327,7 +290,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
         
         Mat person_roi_resized;
-        int target_width = min(PERSON_ROI_MAX_WIDTH, person_roi.cols);
+        int target_width = min(640, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
         
         // 确保目标尺寸有效
@@ -353,9 +316,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (t.is_approaching && !t.has_captured) {
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
-            if (area_ratio > FACE_AREA_RATIO_MIN) {
+            if (area_ratio > 0.05f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
-                if (current_clarity > FACE_CLARITY_THRESH) {
+                if (current_clarity > 50) {
                     // 使用 RetinaFace 检测人脸
                     std::vector<RetinaFaceResult> face_result;
                     int num_faces = face_detect_retian_run(faceCtx, person_roi_resized, face_result, 
@@ -423,7 +386,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                             add_frame_candidate(t.id, frame_data);
                         }
                     }
-                    // 注意：如果 num_faces == 0，不会添加候选帧，因此不会上传无人脸的图片
                 }
             }
         }
