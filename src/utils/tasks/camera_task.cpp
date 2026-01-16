@@ -86,7 +86,7 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
 
     float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
     float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
-    float pitch = (mouth_center_y - eye_center_y) / dx;
+    // float pitch = (mouth_center_y - eye_center_y) / dx;  // 未使用，已注释
     // 正脸标准
     return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
 }
@@ -153,7 +153,7 @@ void CameraTask::run() {
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
-        face_detect_release(faceCtx);
+        face_detect_retian_release(faceCtx);
         return;
     }
     
@@ -161,7 +161,7 @@ void CameraTask::run() {
    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
-        face_detect_release(faceCtx);
+        face_detect_retian_release(faceCtx);
         return;
     }
    */
