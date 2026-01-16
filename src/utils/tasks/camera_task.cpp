@@ -105,86 +105,6 @@ bool CameraTask::isSideFace(const std::vector<cv::Point2f>& landmarks) {
     return (fabs(yaw) >= 0.25 && fabs(yaw) < 0.6);
 }
 
-// 综合人脸质量评估：返回值 2=正脸优质, 1=侧脸可用, 0=背面/劣质
-int CameraTask::getFaceQuality(const std::vector<cv::Point2f>& landmarks, float score, const cv::Rect_<float>& box) {
-    // 1. 检测置信度阈值（背部检测不到人脸或置信度极低）
-    if (score < 0.5f) {
-        return 0; // 置信度太低，可能是背部或误检
-    }
-    
-    if (landmarks.size() != 5) return 0;
-    
-    cv::Point2f left_eye = landmarks[0];
-    cv::Point2f right_eye = landmarks[1];
-    cv::Point2f nose = landmarks[2];
-    cv::Point2f left_mouth = landmarks[3];
-    cv::Point2f right_mouth = landmarks[4];
-    
-    // 2. 双眼距离检测（侧脸和背部时双眼距离异常）
-    float eye_distance = cv::norm(right_eye - left_eye);
-    float face_width = box.width;
-    float eye_distance_ratio = eye_distance / (face_width + 1e-6f);
-    
-    // 正脸双眼距离占脸宽的0.3-0.5，侧脸会变小，背部无法检测到或比例异常
-    if (eye_distance_ratio < 0.15f) {
-        return 0; // 双眼距离过小，可能是极端侧脸或背部
-    }
-    
-    // 3. 人脸框宽高比（正脸约0.8-1.0，侧脸变窄）
-    float aspect_ratio = box.width / (box.height + 1e-6f);
-    if (aspect_ratio < 0.5f || aspect_ratio > 1.3f) {
-        return 0; // 宽高比异常
-    }
-    
-    // 4. 关键点几何验证
-    float dx = right_eye.x - left_eye.x;
-    float dy = right_eye.y - left_eye.y;
-    
-    // 双眼必须水平排列，过大倾斜说明不是正常姿态
-    if (fabs(dx) < 1e-6f) {
-        return 0; // 避免除零，且双眼不应该垂直排列
-    }
-    
-    float roll = atan2(dy, dx) * 180.0 / CV_PI;
-    if (fabs(roll) > 30.0f) {
-        return 0; // 头部倾斜过大
-    }
-    
-    // 5. yaw角度（偏航，判断正面/侧面）
-    float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
-    float yaw = (nose.x - eye_center_x) / dx;
-    
-    // 6. pitch角度（俯仰）
-    float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
-    float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
-    float pitch = (mouth_center_y - eye_center_y) / fabs(dx);
-    
-    // 7. 关键点位置合理性（鼻子应在双眼下方，嘴巴在鼻子下方）
-    if (nose.y < eye_center_y || mouth_center_y < nose.y) {
-        return 0; // 关键点上下位置不合理
-    }
-    
-    // 8. 根据多个指标综合判断
-    bool is_high_confidence = score > 0.85f;
-    bool is_good_eye_ratio = (eye_distance_ratio > 0.25f && eye_distance_ratio < 0.55f);
-    bool is_frontal_yaw = fabs(yaw) < 0.2f;
-    bool is_moderate_yaw = (fabs(yaw) >= 0.2f && fabs(yaw) < 0.5f);
-    bool is_good_pitch = fabs(pitch) < 0.8f;
-    
-    // 正脸：高置信度 + 好的双眼比例 + 正面yaw + 合理pitch
-    if (is_high_confidence && is_good_eye_ratio && is_frontal_yaw && is_good_pitch) {
-        return 2; // 优质正脸
-    }
-    
-    // 侧脸：中等置信度 + 侧面yaw
-    if (score > 0.6f && is_moderate_yaw && is_good_pitch) {
-        return 1; // 可用侧脸
-    }
-    
-    // 其他情况视为劣质
-    return 0;
-}
-
 // -------------------- FPS计算 --------------------
 void CameraTask::updateFPS() {
     auto now = std::chrono::steady_clock::now();
@@ -420,24 +340,20 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
                         if (fbox.width > 0 && fbox.height > 0) {
                             Mat face_aligned = person_roi(fbox).clone();
-                            // 使用综合质量评估替代简单的正脸/侧脸判断
-                            int face_quality = getFaceQuality(face_result[0].landmarks, face_result[0].score, face_result[0].box);
-                            
-                            if (face_quality == 0) {
-                                // 背面、极端侧脸或劣质人脸，直接丢弃
-                                continue;
-                            }
-                            
+                            bool frontal = isFrontalFace(face_result[0].landmarks);
+                            bool side = isSideFace(face_result[0].landmarks);
                             float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
                             float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
                             double current_score = 0.0;
-                            
-                            if (face_quality == 2) {
-                                // 优质正脸：高分（置信度加权）
-                                current_score = current_clarity * 0.6 + area_score * 1000 * 0.3 + face_result[0].score * 200 * 0.1;
-                            } else if (face_quality == 1) {
-                                // 可用侧脸：低分
-                                current_score = current_clarity * 0.3 + area_score * 1000 * 0.1 + face_result[0].score * 50 * 0.1;
+                            if (frontal) {
+                                // 正脸高分
+                                current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
+                            } else if (side) {
+                                // 侧脸低分
+                                current_score = current_clarity * 0.3 + area_score * 1000 * 0.1;
+                            } else {
+                                // 背面或极端侧脸直接丢弃
+                                continue;
                             }
                             Track::FrameData frame_data;
                             frame_data.score = current_score;
