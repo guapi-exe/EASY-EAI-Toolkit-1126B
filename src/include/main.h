@@ -23,7 +23,14 @@
 #define RETIAN_NMS_THRESH   0.4f
 
 // 性能优化配置
-#define PERSON_DETECT_THRESH    0.7f    // 人员检测置信度阈值
-#define FACE_CLARITY_THRESH     50.0    // 人脸清晰度阈值
-#define FACE_AREA_RATIO_MIN     0.05f   // 最小人脸面积比例
-#define PERSON_ROI_MAX_WIDTH    640     // 人员ROI最大宽度（减少人脸检测耗时）
+#define PERSON_DETECT_THRESH    0.7f   
+#define FACE_CLARITY_THRESH     50.0    
+#define FACE_AREA_RATIO_MIN     0.05f
+#define PERSON_ROI_MAX_WIDTH    640    
+
+// 人脸姿态检测阈值（加强检测，避免侧脸和背面）
+#define FACE_YAW_THRESH         0.2f   
+#define FACE_ROLL_THRESH        15.0f   
+#define FACE_PITCH_THRESH       0.3f   
+#define FACE_EYE_DISTANCE_MIN   0.15f  
+#define FACE_SYMMETRY_THRESH    0.15f 

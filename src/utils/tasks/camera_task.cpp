@@ -77,26 +77,63 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     cv::Point2f left_mouth = landmarks[3];
     cv::Point2f right_mouth = landmarks[4];
 
+    // 1. 计算 roll 角（头部倾斜）
     float dx = right_eye.x - left_eye.x;
     float dy = right_eye.y - left_eye.y;
     float roll = atan2(dy, dx) * 180.0 / CV_PI;
+    
+    // 防止除零错误
+    if (fabs(dx) < 1e-6) return false;
 
+    // 2. 计算 yaw 角（水平旋转）
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-    return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
+    
+    // 3. 计算 pitch 角（俯仰角）
+    float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
+    float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
+    float pitch = (mouth_center_y - eye_center_y) / fabs(dx);
+    
+    // 4. 检查眼睛间距（过小说明是侧脸）
+    float eye_distance = sqrt(dx * dx + dy * dy);
+    float face_width = fabs(right_eye.x - left_mouth.x) + fabs(left_eye.x - right_mouth.x);
+    float eye_distance_ratio = eye_distance / (face_width + 1e-6f);
+    
+    // 5. 检查嘴巴对称性（相对于眼睛中心）
+    float mouth_center_x = (left_mouth.x + right_mouth.x) / 2.0;
+    float mouth_symmetry = fabs(mouth_center_x - eye_center_x) / (fabs(dx) + 1e-6f);
+    
+    // 6. 检查鼻子位置（应在眼睛和嘴巴之间）
+    bool nose_between_eyes_mouth = (nose.y > eye_center_y) && (nose.y < mouth_center_y);
+    
+    // 综合判断（更严格的标准）
+    bool is_frontal = 
+        (fabs(roll) < FACE_ROLL_THRESH) &&          // roll 角小于 15°
+        (fabs(yaw) < FACE_YAW_THRESH) &&            // yaw 角小于 0.2
+        (fabs(pitch) < FACE_PITCH_THRESH) &&        // pitch 角合理
+        (eye_distance_ratio > FACE_EYE_DISTANCE_MIN) && // 眼睛间距足够
+        (mouth_symmetry < FACE_SYMMETRY_THRESH) &&  // 嘴巴对称
+        nose_between_eyes_mouth;                     // 鼻子位置合理
+        
+    return is_frontal;
 }
 
-// 新增：判断是否为侧脸
+// 新增：判断是否为侧脸（更严格的判断）
 bool CameraTask::isSideFace(const std::vector<cv::Point2f>& landmarks) {
     if (landmarks.size() != 5) return false;
     cv::Point2f left_eye = landmarks[0];
     cv::Point2f right_eye = landmarks[1];
     cv::Point2f nose = landmarks[2];
+    
     float dx = right_eye.x - left_eye.x;
+    if (fabs(dx) < 1e-6) return false; // 避免除零
+    
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-    // 侧脸标准
-    return (fabs(yaw) >= 0.25 && fabs(yaw) < 0.6);
+    
+    // 侧脸标准：yaw 在 0.2-0.6 之间
+    // 超过 0.6 认为是背面或极端侧脸
+    return (fabs(yaw) >= FACE_YAW_THRESH && fabs(yaw) < 0.6);
 }
 
 // -------------------- FPS计算 --------------------
