@@ -353,21 +353,49 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                         fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
                         if (fbox.width > 0 && fbox.height > 0) {
                             Mat face_aligned = person_roi(fbox).clone();
-                            bool frontal = isFrontalFace(face_result[0].landmarks);
-                            bool side = isSideFace(face_result[0].landmarks);
-                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
-                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-                            double current_score = 0.0;
-                            if (frontal) {
-                                // 正脸高分
-                                current_score = current_clarity * 0.7 + area_score * 1000 * 0.3;
-                            } else if (side) {
-                                // 侧脸低分
-                                current_score = current_clarity * 0.3 + area_score * 1000 * 0.1;
-                            } else {
-                                // 背面或极端侧脸直接丢弃
+                            
+                            // 计算侧脸程度 (yaw)
+                            cv::Point2f left_eye = face_result[0].landmarks[0];
+                            cv::Point2f right_eye = face_result[0].landmarks[1];
+                            cv::Point2f nose = face_result[0].landmarks[2];
+                            float dx = right_eye.x - left_eye.x;
+                            float eye_center_x = (left_eye.x + right_eye.x) / 2.0f;
+                            float yaw = fabs((nose.x - eye_center_x) / dx);
+                            
+                            // 侧脸程度过大则丢弃 (yaw >= 0.7 表示极端侧脸或背面)
+                            if (yaw >= 0.7f) {
                                 continue;
                             }
+                            
+                            // 动态计算质量权重因子（根据侧脸程度）
+                            float quality_weight, area_weight;
+                            if (yaw < 0.15f) {
+                                // 完全正脸 (0 ~ 0.15): 最高权重
+                                quality_weight = 0.8f;
+                                area_weight = 0.35f;
+                            } else if (yaw < 0.30f) {
+                                // 接近正脸 (0.15 ~ 0.30): 线性衰减
+                                float ratio = (yaw - 0.15f) / 0.15f;  // 0 -> 1
+                                quality_weight = 0.8f - ratio * 0.3f;  // 0.8 -> 0.5
+                                area_weight = 0.35f - ratio * 0.15f;   // 0.35 -> 0.2
+                            } else if (yaw < 0.50f) {
+                                // 侧脸 (0.30 ~ 0.50): 继续衰减
+                                float ratio = (yaw - 0.30f) / 0.20f;  // 0 -> 1
+                                quality_weight = 0.5f - ratio * 0.25f;  // 0.5 -> 0.25
+                                area_weight = 0.2f - ratio * 0.12f;     // 0.2 -> 0.08
+                            } else {
+                                // 大角度侧脸 (0.50 ~ 0.70): 最低权重
+                                float ratio = (yaw - 0.50f) / 0.20f;  // 0 -> 1
+                                quality_weight = 0.25f - ratio * 0.15f;  // 0.25 -> 0.1
+                                area_weight = 0.08f - ratio * 0.05f;     // 0.08 -> 0.03
+                            }
+                            
+                            // 计算面积得分
+                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
+                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
+                            
+                            double current_score = current_clarity * quality_weight + area_score * 1000 * area_weight;
+                            
                             for (int j = 0; j < (int)face_result[0].landmarks.size(); ++j) 
                             {
                                 float landmark_x = face_result[0].landmarks[j].x * face_scale_x;
