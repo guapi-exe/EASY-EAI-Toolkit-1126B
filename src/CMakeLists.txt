@@ -93,6 +93,11 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
 )
 
+# RetinaFace 源文件（仅用于 camera_test_retian）
+set(face_detect_retian_srcs
+    ${algorithm_root}/face_detect_retian/face_detect_retian.cpp
+)
+
 ## api静态库文件路径
 link_directories(
    ${FACE_DETECT_LIBS_DIRS} 
@@ -105,12 +110,16 @@ set(sysLib_list
     ${CJSON_LIBS}
     ${RGA_LIBS}
     ${PERSON_DETECT_LIBS} 
-    ${FACE_DETECT_LIBS} 
-    ${FACE_DETECT_RETIAN_LIBS}
+    ${FACE_DETECT_LIBS}
     ${OpenCV_LIBS}
     rga 
     gpiod
     rockchip_mpp
+    )
+
+## RetinaFace 专用库列表（用于 camera_test_retian）
+set(retian_lib_list
+    ${sysLib_list}
     )
 
 set(solutions ${CMAKE_CURRENT_SOURCE_DIR}/../../Solutions)
@@ -144,6 +153,6 @@ target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
 # Camera Test RetinaFace executable
 #--------------------------
 set(camera_test_retian_name camera_test_retian)
-add_executable(${camera_test_retian_name} camera_test_retian.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_retian_name} ${sysLib_list} ${CURL_LIBRARIES})
+add_executable(${camera_test_retian_name} camera_test_retian.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
+target_link_libraries(${camera_test_retian_name} ${retian_lib_list} ${CURL_LIBRARIES})
 target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
