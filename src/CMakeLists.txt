@@ -129,8 +129,8 @@ add_definitions(-DLOG_USE_COLOR)
 # Main executable
 #--------------------------
 set(project_name main)
-add_executable(${project_name} main.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${project_name} ${sysLib_list} ${CURL_LIBRARIES})
+add_executable(${project_name} main.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
+target_link_libraries(${project_name} ${retian_lib_list} ${CURL_LIBRARIES})
 target_include_directories(${project_name} PRIVATE ${api_inc})
 
 #--------------------------

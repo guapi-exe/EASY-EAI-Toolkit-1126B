@@ -10,3 +10,12 @@
 #define IMGRATIO        3
 #define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
 #define MAX_MISSED      30
+
+#define PERSON_MODEL_PATH   "person_detect.model"
+#define FACE_MODEL_PATH     "retinaface_mobilenet0.25_480x640.rknn"
+
+#define RETIAN_MODEL_TYPE   0 
+#define RETIAN_INPUT_H      480
+#define RETIAN_INPUT_W      640
+#define RETIAN_CONF_THRESH  0.5f
+#define RETIAN_NMS_THRESH   0.4f
