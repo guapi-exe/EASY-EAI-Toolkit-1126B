@@ -84,8 +84,8 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
 
-    float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
-    float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
+    // float eye_center_y = (left_eye.y + right_eye.y) / 2.0;
+    // float mouth_center_y = (left_mouth.y + right_mouth.y) / 2.0;
     // float pitch = (mouth_center_y - eye_center_y) / dx;  // 未使用，已注释
     // 正脸标准
     return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
