@@ -54,7 +54,6 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     
     int scale_factor = 2;
     
-    // 确保缩放后尺寸有效
     int new_width = img.cols / scale_factor;
     int new_height = img.rows / scale_factor;
     if (new_width <= 0 || new_height <= 0) {
@@ -159,7 +158,6 @@ void CameraTask::run() {
         return;
     }
    */
-    
 
     vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
@@ -354,6 +352,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                             } else {
                                 // 背面或极端侧脸直接丢弃
                                 continue;
+                            }
+                            for (int j = 0; j < (int)face_result[0].landmarks.size(); ++j) 
+                            {
+                                cv::circle(face_aligned, cv::Point((int)face_result[0].landmarks[j].x, (int)face_result[0].landmarks[j].y), 2, cv::Scalar(225, 0, 225), 2, 8);
                             }
                             Track::FrameData frame_data;
                             frame_data.score = current_score;
