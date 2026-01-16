@@ -136,7 +136,9 @@ target_include_directories(${camera_test_name} PRIVATE ${api_inc})
 # Camera Test Advanced executable
 #--------------------------
 set(camera_test_advanced_name camera_test_advanced)
-add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_
+add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_srcs} ${common_api_srcs})
+target_link_libraries(${camera_test_advanced_name} ${sysLib_list} ${CURL_LIBRARIES})
+target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
 
 #--------------------------
 # Camera Test RetinaFace executable
@@ -144,6 +146,4 @@ add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_
 set(camera_test_retian_name camera_test_retian)
 add_executable(${camera_test_retian_name} camera_test_retian.cpp ${api_srcs} ${common_api_srcs})
 target_link_libraries(${camera_test_retian_name} ${sysLib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_advanced_name} ${sysLib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
+target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
