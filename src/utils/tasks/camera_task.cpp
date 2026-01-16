@@ -363,7 +363,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                             float yaw = fabs((nose.x - eye_center_x) / dx);
                             
                             // 侧脸程度过大则丢弃 (yaw >= 0.7 表示极端侧脸或背面)
-                            if (yaw >= 0.7f) {
+                            if (yaw >= 0.8f) {
                                 continue;
                             }
                             
