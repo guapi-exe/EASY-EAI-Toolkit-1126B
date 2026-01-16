@@ -52,6 +52,7 @@ set(media_root     ${toolkit_root}/media)
 
 include (${algorithm_root}/person_detect/api.cmake)
 include (${algorithm_root}/face_detect/api.cmake)
+include (${algorithm_root}/face_detect_retian/api.cmake)
 include (${common_root}/base64/api.cmake)
 include (${common_root}/json/api.cmake)
 include (${media_root}/rga/api.cmake)
@@ -63,6 +64,7 @@ set(api_inc
     ${CJSON_INCLUDE_DIRS}
     ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
+    ${FACE_DETECT_RETIAN_INCLUDE_DIRS}
     ${PERSON_DETECT_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
@@ -94,6 +96,7 @@ file(GLOB api_srcs
 ## api静态库文件路径
 link_directories(
    ${FACE_DETECT_LIBS_DIRS} 
+   ${FACE_DETECT_RETIAN_LIBS_DIRS}
    ${PERSON_DETECT_LIBS_DIRS} 
 )
 ## 依赖的动态库文件
@@ -103,6 +106,7 @@ set(sysLib_list
     ${RGA_LIBS}
     ${PERSON_DETECT_LIBS} 
     ${FACE_DETECT_LIBS} 
+    ${FACE_DETECT_RETIAN_LIBS}
     ${OpenCV_LIBS}
     rga 
     gpiod
@@ -132,6 +136,14 @@ target_include_directories(${camera_test_name} PRIVATE ${api_inc})
 # Camera Test Advanced executable
 #--------------------------
 set(camera_test_advanced_name camera_test_advanced)
-add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_srcs} ${common_api_srcs})
+add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${api_
+
+#--------------------------
+# Camera Test RetinaFace executable
+#--------------------------
+set(camera_test_retian_name camera_test_retian)
+add_executable(${camera_test_retian_name} camera_test_retian.cpp ${api_srcs} ${common_api_srcs})
+target_link_libraries(${camera_test_retian_name} ${sysLib_list} ${CURL_LIBRARIES})
+target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})srcs} ${common_api_srcs})
 target_link_libraries(${camera_test_advanced_name} ${sysLib_list} ${CURL_LIBRARIES})
 target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
