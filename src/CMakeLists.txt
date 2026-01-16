@@ -66,7 +66,7 @@ set(api_inc
     ${BASE64_INCLUDE_DIRS} 
     ${FACE_DETECT_INCLUDE_DIRS} 
     ${FACE_DETECT_RETIAN_INCLUDE_DIRS}
-    ${face_detect_scrfd_includes}
+    ${FACE_DETECT_SCRFD_INCLUDE_DIRS}
     ${PERSON_DETECT_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
