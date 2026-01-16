@@ -355,7 +355,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                             }
                             for (int j = 0; j < (int)face_result[0].landmarks.size(); ++j) 
                             {
-                                cv::circle(face_aligned, cv::Point((int)face_result[0].landmarks[j].x, (int)face_result[0].landmarks[j].y), 2, cv::Scalar(225, 0, 225), 2, 8);
+                                float landmark_x = face_result[0].landmarks[j].x * face_scale_x;
+                                float landmark_y = face_result[0].landmarks[j].y * face_scale_y;
+                                int draw_x = static_cast<int>(landmark_x - fbox.x);
+                                int draw_y = static_cast<int>(landmark_y - fbox.y);
+                                cv::circle(face_aligned, cv::Point(draw_x, draw_y), 2, cv::Scalar(225, 0, 225), 2, 8);
                             }
                             Track::FrameData frame_data;
                             frame_data.score = current_score;
