@@ -136,23 +136,23 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 #--------------------------
 # Camera Test executable
 #--------------------------
-set(camera_test_name camera_test)
-add_executable(${camera_test_name} camera_test.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_name} ${retian_lib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_name} PRIVATE ${api_inc})
+#set(camera_test_name camera_test)
+#add_executable(${camera_test_name} camera_test.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
+#target_link_libraries(${camera_test_name} ${retian_lib_list} ${CURL_LIBRARIES})
+#target_include_directories(${camera_test_name} PRIVATE ${api_inc})
 
 #--------------------------
 # Camera Test Advanced executable
 #--------------------------
-set(camera_test_advanced_name camera_test_advanced)
-add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_advanced_name} ${retian_lib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
+#set(camera_test_advanced_name camera_test_advanced)
+#add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
+#target_link_libraries(${camera_test_advanced_name} ${retian_lib_list} ${CURL_LIBRARIES})
+#target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
 
 #--------------------------
 # Camera Test RetinaFace executable
 #--------------------------
-set(camera_test_retian_name camera_test_retian)
-add_executable(${camera_test_retian_name} camera_test_retian.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_retian_name} ${retian_lib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
+#set(camera_test_retian_name camera_test_retian)
+#add_executable(${camera_test_retian_name} camera_test_retian.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
+#target_link_libraries(${camera_test_retian_name} ${retian_lib_list} ${CURL_LIBRARIES})
+#target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
