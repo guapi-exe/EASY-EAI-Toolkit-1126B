@@ -74,8 +74,8 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     cv::Point2f left_eye = landmarks[0];
     cv::Point2f right_eye = landmarks[1];
     cv::Point2f nose = landmarks[2];
-    cv::Point2f left_mouth = landmarks[3];
-    cv::Point2f right_mouth = landmarks[4];
+    // cv::Point2f left_mouth = landmarks[3];
+    // cv::Point2f right_mouth = landmarks[4];
 
     float dx = right_eye.x - left_eye.x;
     float dy = right_eye.y - left_eye.y;
@@ -313,11 +313,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             if (area_ratio > 0.05f) {
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 if (current_clarity > 50) {
-                    // 使用 RetinaFace 检测人脸
-                    //std::vector<RetinaFaceResult> face_result;
-                    //int num_faces = face_detect_retian_run(faceCtx, person_roi_resized, face_result, 
-                    //                                       RETIAN_CONF_THRESH, RETIAN_NMS_THRESH, 10);
-                    std::vector<FaceDetectResult> face_result;
+                    std::vector<det> face_result;
                     int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
 
                     float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
