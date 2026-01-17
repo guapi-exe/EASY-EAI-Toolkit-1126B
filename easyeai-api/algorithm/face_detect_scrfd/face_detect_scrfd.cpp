@@ -9,11 +9,12 @@
 static SCRFDConfig g_config;
 static std::vector<std::vector<cv::Point2f>> g_anchor_centers;
 
+// Helper function: Sigmoid activation
 static inline float sigmoid(float x) {
     return 1.0f / (1.0f + expf(-x));
 }
 
-/* ===================== Anchor ===================== */
+// Generate anchor centers for each stride
 static void generate_anchors(const SCRFDConfig& cfg,
                              std::vector<std::vector<cv::Point2f>>& anchors) {
     anchors.clear();
@@ -29,7 +30,6 @@ static void generate_anchors(const SCRFDConfig& cfg,
                 float cx = (x + 0.5f) * stride;
                 float cy = (y + 0.5f) * stride;
 
-                /* SCRFD-1G: 每点 2 anchors */
                 anchors[i].push_back({cx, cy});
                 anchors[i].push_back({cx, cy});
             }
@@ -37,48 +37,93 @@ static void generate_anchors(const SCRFDConfig& cfg,
     }
 }
 
-/* ===================== Config ===================== */
-SCRFDConfig get_scrfd_config(int h, int w) {
+// Get default SCRFD configuration
+SCRFDConfig get_scrfd_config(int input_h, int input_w) {
     SCRFDConfig cfg;
-    cfg.input_height = h;
-    cfg.input_width  = w;
-    cfg.strides = {8, 16, 32};
+    cfg.input_height = input_h;
+    cfg.input_width = input_w;
+    cfg.strides = {8, 16, 32};  
     cfg.conf_thresh = 0.45f;
-    cfg.nms_thresh  = 0.4f;
+    cfg.nms_thresh = 0.4f;
     return cfg;
 }
 
-/* ===================== Init ===================== */
-int face_detect_scrfd_init(rknn_context* ctx,
-                           const char* model_path,
-                           SCRFDConfig* config) {
+int face_detect_scrfd_init(rknn_context *ctx, const char *model_path, SCRFDConfig *config) {
+    if (!ctx || !model_path || !config) {
+        printf("Invalid parameters for face_detect_scrfd_init\n");
+        return -1;
+    }
+    
+    // Save config
     g_config = *config;
+    
+    // Generate anchor centers
     generate_anchors(g_config, g_anchor_centers);
-
-    FILE* fp = fopen(model_path, "rb");
+    printf("Generated anchors for strides: ");
+    for (auto stride : g_config.strides) {
+        printf("%d ", stride);
+    }
+    printf("\n");
+    
+    // Load RKNN model
+    FILE *fp = fopen(model_path, "rb");
+    if (!fp) {
+        printf("Failed to open model file: %s\n", model_path);
+        return -1;
+    }
+    
     fseek(fp, 0, SEEK_END);
-    int len = ftell(fp);
-    rewind(fp);
-
-    void* model = malloc(len);
-    fread(model, 1, len, fp);
+    int model_len = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    void *model_data = malloc(model_len);
+    if (!model_data) {
+        printf("Failed to allocate memory for model\n");
+        fclose(fp);
+        return -1;
+    }
+    
+    if (fread(model_data, 1, model_len, fp) != (size_t)model_len) {
+        printf("Failed to read model file\n");
+        free(model_data);
+        fclose(fp);
+        return -1;
+    }
     fclose(fp);
-
-    int ret = rknn_init(ctx, model, len, 0, NULL);
-    free(model);
-    return ret;
+    
+    // Initialize RKNN
+    int ret = rknn_init(ctx, model_data, model_len, 0, NULL);
+    free(model_data);
+    
+    if (ret < 0) {
+        printf("rknn_init failed: %d\n", ret);
+        return -1;
+    }
+    
+    printf("SCRFD model initialized successfully\n");
+    return 0;
 }
 
-/* ===================== Run ===================== */
+int face_detect_scrfd_release(rknn_context ctx) {
+    if (ctx == 0) {
+        return -1;
+    }
+    
+    g_anchor_centers.clear();
+    rknn_destroy(ctx);
+    printf("SCRFD model released\n");
+    return 0;
+}
+
 int face_detect_scrfd_run(rknn_context ctx,
-                          cv::Mat& img,
+                          cv::Mat&input_image,
                           std::vector<SCRFDResult>& results) {
     results.clear();
 
     cv::Mat resized;
-    float sx = (float)img.cols / g_config.input_width;
-    float sy = (float)img.rows / g_config.input_height;
-    cv::resize(img, resized,
+    float sx = (float)input_image.cols / g_config.input_width;
+    float sy = (float)input_image.rows / g_config.input_height;
+    cv::resize(input_image, resized,
                {g_config.input_width, g_config.input_height});
 
     /* ---------- input ---------- */
