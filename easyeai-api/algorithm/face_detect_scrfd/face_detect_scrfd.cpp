@@ -38,7 +38,7 @@ SCRFDConfig get_scrfd_config(int input_h, int input_w) {
     cfg.input_height = input_h;
     cfg.input_width = input_w;
     cfg.strides = {8, 16, 32};  // Default strides for SCRFD-1G
-    cfg.conf_thresh = 0.6f;
+    cfg.conf_thresh = 0.45f;
     cfg.nms_thresh = 0.4f;
     return cfg;
 }
@@ -88,6 +88,10 @@ int face_detect_scrfd_init(rknn_context *ctx, const char *model_path, SCRFDConfi
     
     // Initialize RKNN
     int ret = rknn_init(ctx, model_data, model_len, 0, NULL);
+    rknn_config(ctx,
+        .mean_values = {127.5, 127.5, 127.5},
+        .std_values  = {128.0, 128.0, 128.0}
+    );
     free(model_data);
     
     if (ret < 0) {
@@ -144,8 +148,8 @@ int face_detect_scrfd_run(rknn_context ctx,
     
     // Normalize: (pixel - 127.5) / 128.0
     cv::Mat normalized;
-    resized.convertTo(normalized, CV_32FC3);
-    normalized = (normalized - 127.5) / 128.0;
+    //resized.convertTo(normalized, CV_32FC3);
+    //normalized = (normalized - 127.5) / 128.0;
     
     // Prepare input
     rknn_input inputs[1];
