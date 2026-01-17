@@ -1,7 +1,7 @@
 #include "camera_task.h"
 #include "main.h"
 #include "person_detect.h"
-#include "face_detect_retian.h"
+#include "face_detect.h"
 #include "sort_tracker.h"
 extern "C" {
 #include "log.h"
@@ -126,14 +126,8 @@ void CameraTask::run() {
         return;
     }
     
-    // 初始化 RetinaFace 模型
-    RetinaFaceConfig faceConfig = get_retian_config(
-        (RetinaFaceModelType)RETIAN_MODEL_TYPE, 
-        RETIAN_INPUT_H, 
-        RETIAN_INPUT_W
-    );
-    if (face_detect_retian_init(&faceCtx, faceModelPath.c_str(), &faceConfig) != 0) {
-        log_debug("CameraTask: face_detect_retian_init failed");
+    if (face_detect_init(&faceCtx, faceModelPath.c_str()) != 0) {
+        log_debug("CameraTask: face_detect_init failed");
         person_detect_release(personCtx);
         return;
     }
@@ -148,7 +142,7 @@ void CameraTask::run() {
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
-        face_detect_retian_release(faceCtx);
+        face_detect_release(faceCtx);
         return;
     }
     
@@ -156,7 +150,7 @@ void CameraTask::run() {
    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
         person_detect_release(personCtx);
-        face_detect_retian_release(faceCtx);
+        face_detect_release(faceCtx);
         return;
     }
    */
@@ -179,7 +173,7 @@ void CameraTask::run() {
 
     mipicamera_exit(cameraIndex);
     person_detect_release(personCtx);
-    face_detect_retian_release(faceCtx);
+    face_detect_release(faceCtx);
 }
 
 void CameraTask::captureSnapshot() {
@@ -320,14 +314,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                 double current_clarity = computeFocusMeasure(person_roi_resized);
                 if (current_clarity > 50) {
                     // 使用 RetinaFace 检测人脸
-                    std::vector<RetinaFaceResult> face_result;
-                    int num_faces = face_detect_retian_run(faceCtx, person_roi_resized, face_result, 
-                                                           RETIAN_CONF_THRESH, RETIAN_NMS_THRESH, 10);
-                    
+                    //std::vector<RetinaFaceResult> face_result;
+                    //int num_faces = face_detect_retian_run(faceCtx, person_roi_resized, face_result, 
+                    //                                       RETIAN_CONF_THRESH, RETIAN_NMS_THRESH, 10);
+                    std::vector<FaceDetectResult> face_result;
+                    int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
+
                     float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
                     float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
                     
-                    // 缩放 RetinaFace 结果到原始尺寸
                     for (auto& face : face_result) {
                         face.box.x *= face_scale_x;
                         face.box.y *= face_scale_y;
@@ -340,7 +335,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     }
                     
                     if (num_faces > 0) {
-                        // 处理人脸框（从 RetinaFaceResult 转换）
                         Rect fbox(static_cast<int>(face_result[0].box.x), 
                                  static_cast<int>(face_result[0].box.y),
                                  static_cast<int>(face_result[0].box.width), 
