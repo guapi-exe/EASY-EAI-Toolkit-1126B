@@ -28,8 +28,8 @@ int main() {
     UploaderTask uploader("111", "http://101.200.56.225:11100");
     HeartbeatTask heartbeat("111", "http://101.200.56.225:11100/receive/heartbeat", std::chrono::seconds(30));
     CommandManager commandManager("111", "http://101.200.56.225:11100/receive/command/confirm");
-    //SerialTask serial("/dev/ttyS2", 115200);
-    //GPIOMonitorTask gpioMonitor("GPIO5_C1");
+    SerialTask serial("/dev/ttyS2", 115200);
+    GPIOMonitorTask gpioMonitor("GPIO5_C1");
     uploader.start();
     
     heartbeat.updateData(hbData);
@@ -70,7 +70,7 @@ int main() {
     tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
     tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
     tm.addTask("SerialTask", [&](){ serial.start(); }, 10, std::chrono::seconds(1), true);
-    //tm.addTask("GPIOMonitorTask", [&](){ gpioMonitor.start(true); }, 10, std::chrono::seconds(1), true);
+    tm.addTask("GPIOMonitorTask", [&](){ gpioMonitor.start(true); }, 10, std::chrono::seconds(1), true);
     tm.startAll();
 
     std::signal(SIGINT, handleSignal);
