@@ -25,21 +25,12 @@ include_directories(${CURL_INCLUDE_DIRS})
 project(test_1)
 add_definitions(-Wall -Wpointer-arith)
 
+# Find OpenCV package
+find_package(OpenCV REQUIRED)
+include_directories(${OpenCV_INCLUDE_DIRS})
+
 set(OpenCV_LIBS
-    opencv_core 
-    opencv_imgproc 
-    opencv_imgcodecs
-#    opencv_calib3d 
-#    opencv_dnn 
-#    opencv_features2d 
-#    opencv_flann 
-    opencv_highgui 
-#    opencv_ml 
-#    opencv_objdetect 
-#    opencv_photo 
-#    opencv_stitching
-    opencv_videoio 
-    opencv_video  
+    ${OpenCV_LIBS}
 )
 
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
