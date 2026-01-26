@@ -38,6 +38,9 @@ typedef struct {
     GstRTSPServer *rtsp_server;
     GstRTSPMountPoints *mounts;
     GstRTSPMediaFactory *factory;
+    // 用于复用的 Mat，避免重复分配
+    Mat *scaled_mat;
+    guint64 frame_count;  // 帧计数，用于追踪客户端连接
 } StreamContext;
 
 void handleSignal(int) {
@@ -188,12 +191,17 @@ static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *med
         g_object_set(G_OBJECT(appsrc), "caps", caps, NULL);
         gst_caps_unref(caps);
         
-        // 保存 appsrc 引用（如果还没有保存）
-        if (!ctx->appsrc) {
-            ctx->appsrc = (GstElement *)gst_object_ref(appsrc);
-            log_info("Client connected! Ready to stream at %dx%d@%dfps", 
-                     ctx->width, ctx->height, ctx->fps);
+        // 保存 appsrc 引用，如果已有旧引用则先释放
+        if (ctx->appsrc) {
+            log_info("Releasing old appsrc reference");
+            gst_object_unref(ctx->appsrc);
+            ctx->appsrc = NULL;
         }
+        
+        ctx->appsrc = (GstElement *)gst_object_ref(appsrc);
+        ctx->frame_count = 0;  // 重置帧计数
+        log_info("Client connected! Ready to stream at %dx%d@%dfps", 
+                 ctx->width, ctx->height, ctx->fps);
         
         gst_object_unref(appsrc);
     } else {
@@ -296,35 +304,58 @@ bool push_frame(StreamContext *ctx, const Mat &frame) {
     }
     
     // 首次推送时记录日志
-    static bool first_frame = true;
-    if (first_frame && ctx->is_rtsp) {
+    if (ctx->frame_count == 0 && ctx->is_rtsp) {
         log_info("Starting to push frames to client...");
-        first_frame = false;
     }
+    ctx->frame_count++;
     
-    // 调整图像大小（如果需要）
-    Mat scaled_frame;
+    // 调整图像大小（如果需要），使用持久 Mat 避免重复分配
+    Mat *scaled_frame_ptr = nullptr;
     if (frame.cols != ctx->width || frame.rows != ctx->height) {
-        cv::resize(frame, scaled_frame, Size(ctx->width, ctx->height));
+        if (!ctx->scaled_mat) {
+            ctx->scaled_mat = new Mat();
+        }
+        cv::resize(frame, *ctx->scaled_mat, Size(ctx->width, ctx->height));
+        scaled_frame_ptr = ctx->scaled_mat;
     } else {
-        scaled_frame = frame;
+        scaled_frame_ptr = const_cast<Mat*>(&frame);
     }
     
     // 创建 GstBuffer
-    gsize size = scaled_frame.total() * scaled_frame.elemSize();
+    gsize size = scaled_frame_ptr->total() * scaled_frame_ptr->elemSize();
     GstBuffer *buffer = gst_buffer_new_allocate(NULL, size, NULL);
+    
+    if (!buffer) {
+        log_error("Failed to allocate GstBuffer");
+        return false;
+    }
     
     // 填充数据
     GstMapInfo map;
-    gst_buffer_map(buffer, &map, GST_MAP_WRITE);
-    memcpy(map.data, scaled_frame.data, size);
+    if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
+        log_error("Failed to map GstBuffer");
+        gst_buffer_unref(buffer);
+        return false;
+    }
+    
+    memcpy(map.data, scaled_frame_ptr->data, size);
     gst_buffer_unmap(buffer, &map);
     
     // 推送到 appsrc
     GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(ctx->appsrc), buffer);
     
     if (ret != GST_FLOW_OK) {
-        log_error("Failed to push buffer to appsrc");
+        // buffer 已经被 appsrc 接管或释放，不需要手动 unref
+        if (ret == GST_FLOW_FLUSHING) {
+            // 客户端可能已断开
+            log_warn("appsrc is flushing, client may have disconnected");
+            if (ctx->is_rtsp && ctx->appsrc) {
+                gst_object_unref(ctx->appsrc);
+                ctx->appsrc = NULL;
+            }
+        } else {
+            log_error("Failed to push buffer to appsrc, flow return: %d", ret);
+        }
         return false;
     }
     
@@ -386,6 +417,12 @@ void stop_streaming(StreamContext *ctx) {
         g_main_loop_quit(ctx->loop);
         g_main_loop_unref(ctx->loop);
         ctx->loop = NULL;
+    }
+    
+    // 清理 scaled_mat
+    if (ctx->scaled_mat) {
+        delete ctx->scaled_mat;
+        ctx->scaled_mat = NULL;
     }
     
     log_info("Streaming stopped");
@@ -520,8 +557,10 @@ int main(int argc, char** argv) {
     
     while (running) {
         // 处理 GMainContext 事件（RTSP Server 需要）
-        while (g_main_context_iteration(main_context, FALSE)) {
-            // 处理所有待处理的事件
+        // 限制每次最多处理 10 个事件，避免阻塞太久
+        int max_iterations = 10;
+        while (max_iterations-- > 0 && g_main_context_iteration(main_context, FALSE)) {
+            // 处理待处理的事件
         }
         
         // 获取一帧
@@ -565,8 +604,27 @@ int main(int argc, char** argv) {
             
             auto total_elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time);
             
-            log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds", 
-                     total_frames, current_fps, total_elapsed.count());
+            // 读取内存使用情况（仅 Linux）
+            long mem_kb = 0;
+            FILE* fp = fopen("/proc/self/status", "r");
+            if (fp) {
+                char line[128];
+                while (fgets(line, sizeof(line), fp)) {
+                    if (strncmp(line, "VmRSS:", 6) == 0) {
+                        sscanf(line + 6, "%ld", &mem_kb);
+                        break;
+                    }
+                }
+                fclose(fp);
+            }
+            
+            if (mem_kb > 0) {
+                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds, 内存=%.2fMB", 
+                         total_frames, current_fps, total_elapsed.count(), mem_kb / 1024.0);
+            } else {
+                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds", 
+                         total_frames, current_fps, total_elapsed.count());
+            }
         }
         
         // 控制帧率
