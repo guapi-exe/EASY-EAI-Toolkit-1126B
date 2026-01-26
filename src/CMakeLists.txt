@@ -1,70 +1,91 @@
 cmake_minimum_required(VERSION 3.10.2)
 
-STRING(REGEX REPLACE ".*/(.*)" "\\1" CURRENT_FOLDER ${CMAKE_CURRENT_SOURCE_DIR})
-MESSAGE("current project: " ${CURRENT_FOLDER})
+project(test_1 LANGUAGES C CXX)
 
-set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_CROSSCOMPILING TRUE)
-
+# ==========================================
+# 架构判断
+# ==========================================
 cmake_host_system_information(RESULT arch_value QUERY OS_PLATFORM)
-message(STATUS "architecture: " ${arch_value})
+message(STATUS "architecture: ${arch_value}")
 
-if((NOT "${arch_value}" STREQUAL "armv7l") AND (NOT "${arch_value}" STREQUAL "aarch64"))
-    include ($ENV{HOME}/configs/cross.cmake)
+# 只有在非 ARM 本机时才启用交叉工具链
+if(NOT "${arch_value}" STREQUAL "armv7l" AND
+   NOT "${arch_value}" STREQUAL "aarch64")
+    include($ENV{HOME}/configs/cross.cmake)
 endif()
 
-find_package(CURL QUIET)
+# ==========================================
+# 编译器 & 稳定性设置（防 gcc ICE）
+# ==========================================
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ARM + gcc-11/12 强烈建议这样
+add_compile_options(
+    -O0
+    -g
+    -fno-strict-aliasing
+)
+
+add_definitions(
+    -Wall
+    -Wpointer-arith
+    -DLOG_USE_COLOR
+)
+
+# ==========================================
+# CURL
+# ==========================================
+find_package(CURL QUIET)
 if (CURL_FOUND)
     message(STATUS "Found system libcurl: ${CURL_LIBRARIES}")
 else()
-    message(WARNING "CURL not found automatically, using manual include/lib paths")
+    message(WARNING "CURL not found automatically, using manual paths")
     set(CURL_INCLUDE_DIRS ${CMAKE_SYSROOT}/usr/include)
     set(CURL_LIBRARIES ${CMAKE_SYSROOT}/usr/lib/libcurl.so)
 endif()
 
-include_directories(${CURL_INCLUDE_DIRS})
-#若要使用${CMAKE_SYSROOT}变量，project必须要在set(CMAKE_TOOLCHAIN_FILE "${HOST_DIR}/share/buildroot/toolchainfile.cmake")后面设置
-project(test_1)
-add_definitions(-Wall -Wpointer-arith)
-
+# ==========================================
+# OpenCV libs
+# ==========================================
 set(OpenCV_LIBS
-    opencv_core 
-    opencv_imgproc 
+    opencv_core
+    opencv_imgproc
     opencv_imgcodecs
-#    opencv_calib3d 
-#    opencv_dnn 
-#    opencv_features2d 
-#    opencv_flann 
-    opencv_highgui 
-#    opencv_ml 
-#    opencv_objdetect 
-#    opencv_photo 
-#    opencv_stitching
-    opencv_videoio 
-    opencv_video  
+    opencv_highgui
+    opencv_videoio
+    opencv_video
 )
 
+# ==========================================
+# Toolkit paths
+# ==========================================
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
 set(media_root     ${toolkit_root}/media)
 
-include (${algorithm_root}/person_detect/api.cmake)
-include (${algorithm_root}/face_detect/api.cmake)
-include (${algorithm_root}/face_detect_retian/api.cmake)
-include (${algorithm_root}/face_detect_scrfd/api.cmake)
-include (${common_root}/base64/api.cmake)
-include (${common_root}/json/api.cmake)
-include (${media_root}/rga/api.cmake)
+# ==========================================
+# SDK api.cmake
+# ==========================================
+include(${algorithm_root}/person_detect/api.cmake)
+include(${algorithm_root}/face_detect/api.cmake)
+include(${algorithm_root}/face_detect_retian/api.cmake)
+include(${algorithm_root}/face_detect_scrfd/api.cmake)
+include(${common_root}/base64/api.cmake)
+include(${common_root}/json/api.cmake)
+include(${media_root}/rga/api.cmake)
 
-## api头文件路径
-set(api_inc 
-    include/
+# ==========================================
+# Include dirs
+# ==========================================
+set(api_inc
+    include
     include/tasks
     ${CJSON_INCLUDE_DIRS}
-    ${BASE64_INCLUDE_DIRS} 
-    ${FACE_DETECT_INCLUDE_DIRS} 
+    ${BASE64_INCLUDE_DIRS}
+    ${FACE_DETECT_INCLUDE_DIRS}
     ${FACE_DETECT_RETIAN_INCLUDE_DIRS}
     ${FACE_DETECT_SCRFD_INCLUDE_DIRS}
     ${PERSON_DETECT_INCLUDE_DIRS}
@@ -77,11 +98,13 @@ set(api_inc
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/uart
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/gpio
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera
-    )
-## api源文件路径
+)
 
-file(GLOB api_srcs 
-    ${BASE64_SOURCE_DIRS} 
+# ==========================================
+# Sources
+# ==========================================
+file(GLOB api_srcs
+    ${BASE64_SOURCE_DIRS}
     ${CJSON_SOURCE_DIRS}
     ${RGA_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
@@ -95,80 +118,61 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
 )
 
-# RetinaFace 源文件
 set(face_detect_retian_srcs
     ${algorithm_root}/face_detect_retian/face_detect_retian.cpp
     ${algorithm_root}/face_detect_scrfd/face_detect_scrfd.cpp
 )
 
-# SCRFD 源文件
-set(face_detect_scrfd_srcs
+# ==========================================
+# Link directories
+# ==========================================
+link_directories(
+    ${FACE_DETECT_LIBS_DIRS}
+    ${FACE_DETECT_RETIAN_LIBS_DIRS}
+    ${FACE_DETECT_SCRFD_LIBS_DIRS}
+    ${PERSON_DETECT_LIBS_DIRS}
 )
 
-## api静态库文件路径
-link_directories(
-   ${FACE_DETECT_LIBS_DIRS} 
-   ${FACE_DETECT_RETIAN_LIBS_DIRS}
-   ${FACE_DETECT_SCRFD_LIBS_DIRS}
-   ${PERSON_DETECT_LIBS_DIRS} 
-)
-## 依赖的动态库文件
-set(sysLib_list 
+# ==========================================
+# System libs
+# ==========================================
+set(sysLib_list
     ${BASE64_LIBS}
     ${CJSON_LIBS}
     ${RGA_LIBS}
-    ${PERSON_DETECT_LIBS} 
+    ${PERSON_DETECT_LIBS}
     ${FACE_DETECT_LIBS}
     ${OpenCV_LIBS}
-    rga 
+    rga
     gpiod
     rockchip_mpp
-    )
+)
 
-## RetinaFace 专用库列表（用于 camera_test_retian）
-set(retian_lib_list
-    ${sysLib_list}
-    )
+# ==========================================
+# SDK 静态库（关键：避免 gcc ICE）
+# ==========================================
+add_library(easyeai_api STATIC
+    ${api_srcs}
+)
 
-set(solutions ${CMAKE_CURRENT_SOURCE_DIR}/../../Solutions)
-add_definitions(-DLOG_USE_COLOR)
+target_include_directories(easyeai_api PUBLIC ${api_inc})
+target_link_libraries(easyeai_api PUBLIC ${sysLib_list})
 
-#--------------------------
+# ==========================================
 # Main executable
-#--------------------------
-set(project_name main)
-add_executable(${project_name} main.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${project_name} ${sysLib_list} ${CURL_LIBRARIES})
-target_include_directories(${project_name} PRIVATE ${api_inc})
+# ==========================================
+add_executable(main main.cpp)
+target_link_libraries(main easyeai_api ${CURL_LIBRARIES})
 
-#--------------------------
-# Camera Test executable
-#--------------------------
-#set(camera_test_name camera_test)
-#add_executable(${camera_test_name} camera_test.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-#target_link_libraries(${camera_test_name} ${retian_lib_list} ${CURL_LIBRARIES})
-#target_include_directories(${camera_test_name} PRIVATE ${api_inc})
+# ==========================================
+# Camera test advanced
+# ==========================================
+add_executable(camera_test_advanced
+    camera_test_advanced.cpp
+    ${face_detect_retian_srcs}
+)
 
-#--------------------------
-# Camera Test Advanced executable
-#--------------------------
-set(camera_test_advanced_name camera_test_advanced)
-add_executable(${camera_test_advanced_name} camera_test_advanced.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_test_advanced_name} ${retian_lib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
-
-#--------------------------
-# Camera Test RetinaFace executable
-#--------------------------
-#set(camera_test_retian_name camera_test_retian)
-#add_executable(${camera_test_retian_name} camera_test_retian.cpp ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-#target_link_libraries(${camera_test_retian_name} ${retian_lib_list} ${CURL_LIBRARIES})
-#target_include_directories(${camera_test_retian_name} PRIVATE ${api_inc})
-
-#--------------------------
-# Camera Test SCRFD executable
-#--------------------------
-#set(camera_test_scrfd_name camera_test_scrfd)
-#add_executable(${camera_test_scrfd_name} camera_test_scrfd.cpp ${face_detect_scrfd_srcs} ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
-#target_link_libraries(${camera_test_scrfd_name} ${retian_lib_list} ${CURL_LIBRARIES})
-#target_include_directories(${camera_test_scrfd_name} PRIVATE ${api_inc})
+target_link_libraries(camera_test_advanced
+    easyeai_api
+    ${CURL_LIBRARIES}
+)
