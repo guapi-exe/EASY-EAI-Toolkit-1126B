@@ -156,12 +156,27 @@ bool create_rtmp_pipeline(StreamContext *ctx, const char *rtmp_url, int width, i
 // RTSP media 配置回调
 static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data) {
     StreamContext *ctx = (StreamContext *)user_data;
+    
+    log_info("RTSP client connected, configuring media...");
+    
     GstElement *element = gst_rtsp_media_get_element(media);
-    GstElement *appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), "videosrc");
+    if (!element) {
+        log_error("Failed to get media element");
+        return;
+    }
+    
+    // 查找 appsrc（使用 gst_bin_get_by_name）
+    GstElement *appsrc = gst_bin_get_by_name(GST_BIN(element), "videosrc");
     
     if (appsrc) {
+        log_info("Found appsrc, configuring...");
+        
         // 配置 appsrc
         gst_util_set_object_arg(G_OBJECT(appsrc), "format", "time");
+        g_object_set(G_OBJECT(appsrc),
+                     "is-live", TRUE,
+                     "do-timestamp", TRUE,
+                     NULL);
         
         // 设置 caps
         GstCaps *caps = gst_caps_new_simple("video/x-raw",
@@ -173,10 +188,16 @@ static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *med
         g_object_set(G_OBJECT(appsrc), "caps", caps, NULL);
         gst_caps_unref(caps);
         
-        // 保存 appsrc 引用
-        ctx->appsrc = (GstElement *)gst_object_ref(appsrc);
+        // 保存 appsrc 引用（如果还没有保存）
+        if (!ctx->appsrc) {
+            ctx->appsrc = (GstElement *)gst_object_ref(appsrc);
+            log_info("Client connected! Ready to stream at %dx%d@%dfps", 
+                     ctx->width, ctx->height, ctx->fps);
+        }
         
         gst_object_unref(appsrc);
+    } else {
+        log_error("Failed to find appsrc element 'videosrc'");
     }
     
     if (element) {
@@ -233,12 +254,11 @@ bool create_rtsp_pipeline(StreamContext *ctx, const char *rtsp_url, int width, i
     // 设置 pipeline 描述（使用 appsrc）
     char launch_str[512];
     snprintf(launch_str, sizeof(launch_str),
-             "appsrc name=videosrc ! "
+             "appsrc name=videosrc format=time ! "
              "videoconvert ! "
-             "video/x-raw,format=I420,width=%d,height=%d,framerate=%d/1 ! "
              "x264enc tune=zerolatency bitrate=2000 speed-preset=superfast key-int-max=%d ! "
              "rtph264pay name=pay0 pt=96",
-             width, height, fps, fps * 2);
+             fps * 2);
     
     gst_rtsp_media_factory_set_launch(ctx->factory, launch_str);
     gst_rtsp_media_factory_set_shared(ctx->factory, TRUE);
@@ -273,6 +293,13 @@ bool push_frame(StreamContext *ctx, const Mat &frame) {
             return true;
         }
         return false;
+    }
+    
+    // 首次推送时记录日志
+    static bool first_frame = true;
+    if (first_frame && ctx->is_rtsp) {
+        log_info("Starting to push frames to client...");
+        first_frame = false;
     }
     
     // 调整图像大小（如果需要）
@@ -485,10 +512,18 @@ int main(int argc, char** argv) {
     
     vector<unsigned char> buffer(IMAGE_SIZE);
     
+    // 获取默认 GMainContext（用于 RTSP Server）
+    GMainContext *main_context = g_main_context_default();
+    
     log_info("开始推流，按 Ctrl+C 停止...");
     log_info("=================================");
     
     while (running) {
+        // 处理 GMainContext 事件（RTSP Server 需要）
+        while (g_main_context_iteration(main_context, FALSE)) {
+            // 处理所有待处理的事件
+        }
+        
         // 获取一帧
         if (mipicamera_getframe(CAMERA_INDEX_1, reinterpret_cast<char*>(buffer.data())) != 0) {
             log_error("获取帧失败");
