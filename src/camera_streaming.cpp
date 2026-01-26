@@ -40,7 +40,10 @@ typedef struct {
     GstRTSPMediaFactory *factory;
     // 用于复用的 Mat，避免重复分配
     Mat *scaled_mat;
+    Mat *frame_mat;  // 复用摄像头帧的 Mat
+    std::vector<unsigned char> *camera_buffer;  // 复用摄像头 buffer
     guint64 frame_count;  // 帧计数，用于追踪客户端连接
+    guint64 dropped_frames;  // 丢帧计数
 } StreamContext;
 
 void handleSignal(int) {
@@ -103,11 +106,14 @@ bool create_rtmp_pipeline(StreamContext *ctx, const char *rtmp_url, int width, i
     }
     
     // 配置 appsrc
+    gsize frame_size = width * height * 3;  // BGR
     g_object_set(G_OBJECT(ctx->appsrc),
                  "stream-type", 0,  // GST_APP_STREAM_TYPE_STREAM
                  "format", GST_FORMAT_TIME,
                  "is-live", TRUE,
                  "do-timestamp", TRUE,
+                 "max-bytes", frame_size * 3,  // 最多缓冲 3 帧
+                 "block", FALSE,  // 不阻塞
                  NULL);
     
     // 设置 caps
@@ -176,9 +182,17 @@ static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *med
         
         // 配置 appsrc
         gst_util_set_object_arg(G_OBJECT(appsrc), "format", "time");
+        
+        // 计算单帧大小
+        gsize frame_size = ctx->width * ctx->height * 3;  // BGR
+        
         g_object_set(G_OBJECT(appsrc),
                      "is-live", TRUE,
                      "do-timestamp", TRUE,
+                     "format", GST_FORMAT_TIME,
+                     "max-bytes", frame_size * 3,  // 最多缓冲 3 帧，防止堆积
+                     "block", FALSE,  // 不阻塞，缓冲区满时丢帧
+                     "emit-signals", FALSE,
                      NULL);
         
         // 设置 caps
@@ -353,10 +367,18 @@ bool push_frame(StreamContext *ctx, const Mat &frame) {
                 gst_object_unref(ctx->appsrc);
                 ctx->appsrc = NULL;
             }
+            return false;
+        } else if (ret == GST_FLOW_EOS) {
+            log_warn("appsrc reached EOS");
+            return false;
         } else {
-            log_error("Failed to push buffer to appsrc, flow return: %d", ret);
+            // 其他错误，可能是缓冲区满，丢弃这帧
+            ctx->dropped_frames++;
+            if (ctx->dropped_frames % 100 == 1) {  // 每 100 帧报告一次
+                log_warn("Dropped frames: %llu (buffer may be full)", ctx->dropped_frames);
+            }
+            return true;  // 返回 true 继续运行
         }
-        return false;
     }
     
     return true;
@@ -423,6 +445,18 @@ void stop_streaming(StreamContext *ctx) {
     if (ctx->scaled_mat) {
         delete ctx->scaled_mat;
         ctx->scaled_mat = NULL;
+    }
+    
+    // 清理 frame_mat
+    if (ctx->frame_mat) {
+        delete ctx->frame_mat;
+        ctx->frame_mat = NULL;
+    }
+    
+    // 清理 camera_buffer
+    if (ctx->camera_buffer) {
+        delete ctx->camera_buffer;
+        ctx->camera_buffer = NULL;
     }
     
     log_info("Streaming stopped");
@@ -547,7 +581,13 @@ int main(int argc, char** argv) {
     long frames_at_last_update = 0;
     double current_fps = 0.0;
     
-    vector<unsigned char> buffer(IMAGE_SIZE);
+    // 初始化复用的 buffer 和 Mat
+    if (!stream_ctx.camera_buffer) {
+        stream_ctx.camera_buffer = new vector<unsigned char>(IMAGE_SIZE);
+    }
+    if (!stream_ctx.frame_mat) {
+        stream_ctx.frame_mat = new Mat(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3);
+    }
     
     // 获取默认 GMainContext（用于 RTSP Server）
     GMainContext *main_context = g_main_context_default();
@@ -564,22 +604,24 @@ int main(int argc, char** argv) {
         }
         
         // 获取一帧
-        if (mipicamera_getframe(CAMERA_INDEX_1, reinterpret_cast<char*>(buffer.data())) != 0) {
+        if (mipicamera_getframe(CAMERA_INDEX_1, reinterpret_cast<char*>(stream_ctx.camera_buffer->data())) != 0) {
             log_error("获取帧失败");
             continue;
         }
         
-        // 创建 Mat 对象
-        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
-        if (frame.empty()) {
+        // 使用复用的 Mat，不复制数据，只是包装 buffer
+        stream_ctx.frame_mat->data = stream_ctx.camera_buffer->data();
+        
+        if (stream_ctx.frame_mat->empty()) {
             log_error("帧数据为空");
             continue;
         }
         
         // 推送到流
-        if (!push_frame(&stream_ctx, frame)) {
-            log_error("推送帧失败");
-            break;
+        if (!push_frame(&stream_ctx, *stream_ctx.frame_mat)) {
+            // 不再 break，继续运行（可能只是客户端断开）
+            // log_error("推送帧失败");
+            // break;
         }
         
         // 保存到本地（可选）
@@ -590,6 +632,16 @@ int main(int argc, char** argv) {
         }
         
         total_frames++;
+        
+        // 每 300 帧（约 10 秒）强制清理一次
+        if (total_frames % 300 == 0) {
+            // 强制触发垃圾回收
+            if (stream_ctx.scaled_mat && !stream_ctx.scaled_mat->empty()) {
+                stream_ctx.scaled_mat->release();
+            }
+            // 清理 GStreamer 缓存
+            g_main_context_wakeup(main_context);
+        }
         
         // 计算 FPS（每秒更新一次）
         auto now = std::chrono::steady_clock::now();
@@ -619,11 +671,11 @@ int main(int argc, char** argv) {
             }
             
             if (mem_kb > 0) {
-                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds, 内存=%.2fMB", 
-                         total_frames, current_fps, total_elapsed.count(), mem_kb / 1024.0);
+                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds, 内存=%.2fMB, 丢帧=%llu", 
+                         total_frames, current_fps, total_elapsed.count(), mem_kb / 1024.0, stream_ctx.dropped_frames);
             } else {
-                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds", 
-                         total_frames, current_fps, total_elapsed.count());
+                log_info("推流统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds, 丢帧=%llu", 
+                         total_frames, current_fps, total_elapsed.count(), stream_ctx.dropped_frames);
             }
         }
         
