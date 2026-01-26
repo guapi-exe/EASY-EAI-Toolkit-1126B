@@ -29,10 +29,6 @@ add_definitions(-Wall -Wpointer-arith)
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-set(OpenCV_LIBS
-    ${OpenCV_LIBS}
-)
-
 set(toolkit_root ${CMAKE_CURRENT_SOURCE_DIR}/../easyeai-api)
 set(algorithm_root ${toolkit_root}/algorithm)
 set(common_root    ${toolkit_root}/common)
@@ -111,7 +107,7 @@ set(sysLib_list
     ${PERSON_DETECT_LIBS} 
     ${FACE_DETECT_LIBS}
     ${GSTOPT_LIBS}
-    ${OpenCV_LIBS}
+    ${OpenCV_LIBRARIES}
     rga 
     gpiod
     rockchip_mpp
