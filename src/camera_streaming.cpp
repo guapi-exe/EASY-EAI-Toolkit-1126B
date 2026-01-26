@@ -627,7 +627,7 @@ int main(int argc, char** argv) {
         // 保存到本地（可选）
         if (save_local && video_writer.isOpened()) {
             Mat resized_frame;
-            cv::resize(frame, resized_frame, Size(output_width, output_height));
+            cv::resize(*stream_ctx.frame_mat, resized_frame, Size(output_width, output_height));
             video_writer.write(resized_frame);
         }
         
