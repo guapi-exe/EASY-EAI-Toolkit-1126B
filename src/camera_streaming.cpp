@@ -33,6 +33,7 @@ typedef struct {
     guint fps;
     gint width;
     gint height;
+    bool is_rtsp;  // 是否是 RTSP 模式
     // RTSP Server 相关
     GstRTSPServer *rtsp_server;
     GstRTSPMountPoints *mounts;
@@ -188,6 +189,7 @@ bool create_rtsp_pipeline(StreamContext *ctx, const char *rtsp_url, int width, i
     ctx->width = width;
     ctx->height = height;
     ctx->fps = fps;
+    ctx->is_rtsp = true;
     
     // 解析 RTSP URL (格式: rtsp://host:port/path)
     const char *port = "8554";
@@ -260,7 +262,16 @@ bool create_rtsp_pipeline(StreamContext *ctx, const char *rtsp_url, int width, i
 
 // 推送视频帧到 GStreamer
 bool push_frame(StreamContext *ctx, const Mat &frame) {
-    if (!ctx || !ctx->appsrc) {
+    if (!ctx) {
+        return false;
+    }
+    
+    // RTSP 模式下，如果没有客户端连接，appsrc 可能为 NULL，这是正常的
+    if (!ctx->appsrc) {
+        if (ctx->is_rtsp) {
+            // RTSP 模式，等待客户端连接，不报错
+            return true;
+        }
         return false;
     }
     
@@ -302,6 +313,9 @@ bool start_streaming(StreamContext *ctx) {
     // RTSP 模式不需要启动 pipeline（由 RTSP server 管理）
     if (ctx->rtsp_server) {
         log_info("RTSP server started, waiting for connections...");
+        log_info("Use this command to view stream:");
+        log_info("  ffplay rtsp://localhost:8554/stream");
+        log_info("  or vlc rtsp://localhost:8554/stream");
         return true;
     }
     
