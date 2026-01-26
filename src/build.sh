@@ -19,7 +19,7 @@ rm -rf build
 mkdir build
 cd build
 cmake -D ENABLE_FAST_MATH=ON -D WITH_TBB=ON -D WITH_OPENCL=ON -D ENABLE_NEON=ON -D ENABLE_AVX=ON .. 
-make -j$(nproc)
+make -j1
 
 # release
 # The executable name 'main' is based on 'set(project_name main)' in CMakeLists.txt
