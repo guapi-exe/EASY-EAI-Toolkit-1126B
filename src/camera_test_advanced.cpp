@@ -71,6 +71,8 @@ int main(int argc, char** argv) {
         log_error("摄像头初始化失败!");
         return -1;
     }
+    mipicamera_set_format(CAMERA_INDEX_1, RK_FORMAT_RGB_888);
+
     log_info("摄像头初始化成功");
     
     // 设置信号处理

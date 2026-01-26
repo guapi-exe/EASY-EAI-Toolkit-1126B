@@ -429,7 +429,7 @@ int mipicamera_init(int camIndex, int outWidth, int outHeight, int rot)
 	memset(&mipiCam[i], 0, sizeof(mipi_camera_t));
 	mipiCam[i].out_width = outWidth;
 	mipiCam[i].out_height = outHeight;
-	mipiCam[i].out_format = RK_FORMAT_YCbCr_420_SP;
+	mipiCam[i].out_format = RK_FORMAT_BGR_888;
 
 	switch(rot) {
 	case 90:
