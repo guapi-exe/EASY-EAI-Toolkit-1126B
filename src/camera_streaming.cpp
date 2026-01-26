@@ -5,6 +5,7 @@
 #include <atomic>
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/rtsp-server/rtsp-server.h>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -32,6 +33,10 @@ typedef struct {
     guint fps;
     gint width;
     gint height;
+    // RTSP Server 相关
+    GstRTSPServer *rtsp_server;
+    GstRTSPMountPoints *mounts;
+    GstRTSPMediaFactory *factory;
 } StreamContext;
 
 void handleSignal(int) {
@@ -147,78 +152,109 @@ bool create_rtmp_pipeline(StreamContext *ctx, const char *rtmp_url, int width, i
     return true;
 }
 
+// RTSP media 配置回调
+static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data) {
+    StreamContext *ctx = (StreamContext *)user_data;
+    GstElement *element = gst_rtsp_media_get_element(media);
+    GstElement *appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), "videosrc");
+    
+    if (appsrc) {
+        // 配置 appsrc
+        gst_util_set_object_arg(G_OBJECT(appsrc), "format", "time");
+        
+        // 设置 caps
+        GstCaps *caps = gst_caps_new_simple("video/x-raw",
+                                            "format", G_TYPE_STRING, "BGR",
+                                            "width", G_TYPE_INT, ctx->width,
+                                            "height", G_TYPE_INT, ctx->height,
+                                            "framerate", GST_TYPE_FRACTION, ctx->fps, 1,
+                                            NULL);
+        g_object_set(G_OBJECT(appsrc), "caps", caps, NULL);
+        gst_caps_unref(caps);
+        
+        // 保存 appsrc 引用
+        ctx->appsrc = (GstElement *)gst_object_ref(appsrc);
+        
+        gst_object_unref(appsrc);
+    }
+    
+    if (element) {
+        gst_object_unref(element);
+    }
+}
+
 // 创建 RTSP 推流 pipeline
 bool create_rtsp_pipeline(StreamContext *ctx, const char *rtsp_url, int width, int height, int fps) {
     ctx->width = width;
     ctx->height = height;
     ctx->fps = fps;
     
-    // 创建元素
-    ctx->pipeline = gst_pipeline_new("rtsp-pipeline");
-    ctx->appsrc = gst_element_factory_make("appsrc", "source");
-    ctx->videoconvert = gst_element_factory_make("videoconvert", "convert");
-    ctx->videoscale = gst_element_factory_make("videoscale", "scale");
-    ctx->encoder = gst_element_factory_make("x264enc", "encoder");
-    ctx->muxer = gst_element_factory_make("rtph264pay", "payloader");
-    ctx->sink = gst_element_factory_make("udpsink", "sink");
+    // 解析 RTSP URL (格式: rtsp://host:port/path)
+    const char *port = "8554";
+    const char *mount_path = "/stream";
     
-    if (!ctx->pipeline || !ctx->appsrc || !ctx->videoconvert || 
-        !ctx->videoscale || !ctx->encoder || !ctx->muxer || !ctx->sink) {
-        log_error("Failed to create GStreamer elements for RTSP");
+    if (rtsp_url && strlen(rtsp_url) > 0) {
+        // 简单解析 URL，提取端口和路径
+        const char *port_start = strstr(rtsp_url, ":");
+        if (port_start) {
+            port_start = strchr(port_start + 3, ':'); // 跳过 "://"
+            if (port_start) {
+                port = port_start + 1;
+            }
+        }
+        const char *path_start = strrchr(rtsp_url, '/');
+        if (path_start && strlen(path_start) > 1) {
+            mount_path = path_start;
+        }
+    }
+    
+    // 创建 RTSP Server
+    ctx->rtsp_server = gst_rtsp_server_new();
+    if (!ctx->rtsp_server) {
+        log_error("Failed to create RTSP server");
         return false;
     }
     
-    // 配置 appsrc
-    g_object_set(G_OBJECT(ctx->appsrc),
-                 "stream-type", 0,
-                 "format", GST_FORMAT_TIME,
-                 "is-live", TRUE,
-                 "do-timestamp", TRUE,
-                 NULL);
+    // 设置端口
+    g_object_set(ctx->rtsp_server, "service", port, NULL);
     
-    // 设置 caps
-    char caps_str[256];
-    snprintf(caps_str, sizeof(caps_str),
-             "video/x-raw,format=BGR,width=%d,height=%d,framerate=%d/1",
-             width, height, fps);
-    GstCaps *caps = gst_caps_from_string(caps_str);
-    gst_app_src_set_caps(GST_APP_SRC(ctx->appsrc), caps);
-    gst_caps_unref(caps);
+    // 获取 mount points
+    ctx->mounts = gst_rtsp_server_get_mount_points(ctx->rtsp_server);
     
-    // 配置编码器
-    g_object_set(G_OBJECT(ctx->encoder),
-                 "tune", 0x00000004,
-                 "bitrate", 2000,
-                 "speed-preset", 1,
-                 NULL);
-    
-    // 配置 UDP sink（RTSP 通常使用 UDP 传输）
-    g_object_set(G_OBJECT(ctx->sink),
-                 "host", "127.0.0.1",
-                 "port", 5000,
-                 NULL);
-    
-    // 添加元素到 pipeline
-    gst_bin_add_many(GST_BIN(ctx->pipeline),
-                     ctx->appsrc, ctx->videoconvert, ctx->videoscale,
-                     ctx->encoder, ctx->muxer, ctx->sink, NULL);
-    
-    // 链接元素
-    if (!gst_element_link_many(ctx->appsrc, ctx->videoconvert, ctx->videoscale,
-                                ctx->encoder, ctx->muxer, ctx->sink, NULL)) {
-        log_error("Failed to link GStreamer elements for RTSP");
+    // 创建 media factory
+    ctx->factory = gst_rtsp_media_factory_new();
+    if (!ctx->factory) {
+        log_error("Failed to create RTSP media factory");
         return false;
     }
     
-    // 创建主循环
-    ctx->loop = g_main_loop_new(NULL, FALSE);
+    // 设置 pipeline 描述（使用 appsrc）
+    char launch_str[512];
+    snprintf(launch_str, sizeof(launch_str),
+             "appsrc name=videosrc ! "
+             "videoconvert ! "
+             "video/x-raw,format=I420,width=%d,height=%d,framerate=%d/1 ! "
+             "x264enc tune=zerolatency bitrate=2000 speed-preset=superfast key-int-max=%d ! "
+             "rtph264pay name=pay0 pt=96",
+             width, height, fps, fps * 2);
     
-    // 添加总线监听
-    GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(ctx->pipeline));
-    gst_bus_add_watch(bus, bus_callback, ctx->loop);
-    gst_object_unref(bus);
+    gst_rtsp_media_factory_set_launch(ctx->factory, launch_str);
+    gst_rtsp_media_factory_set_shared(ctx->factory, TRUE);
     
-    log_info("RTSP pipeline created");
+    // 连接 media-configure 信号
+    g_signal_connect(ctx->factory, "media-configure",
+                     G_CALLBACK(rtsp_media_configure), ctx);
+    
+    // 添加到 mount points
+    gst_rtsp_mount_points_add_factory(ctx->mounts, mount_path, ctx->factory);
+    g_object_unref(ctx->mounts);
+    
+    // attach server
+    gst_rtsp_server_attach(ctx->rtsp_server, NULL);
+    
+    log_info("RTSP server created");
+    log_info("Stream ready at rtsp://localhost:%s%s", port, mount_path);
+    
     return true;
 }
 
@@ -259,7 +295,18 @@ bool push_frame(StreamContext *ctx, const Mat &frame) {
 
 // 启动推流
 bool start_streaming(StreamContext *ctx) {
-    if (!ctx || !ctx->pipeline) {
+    if (!ctx) {
+        return false;
+    }
+    
+    // RTSP 模式不需要启动 pipeline（由 RTSP server 管理）
+    if (ctx->rtsp_server) {
+        log_info("RTSP server started, waiting for connections...");
+        return true;
+    }
+    
+    // RTMP 模式需要启动 pipeline
+    if (!ctx->pipeline) {
         return false;
     }
     
@@ -279,16 +326,25 @@ void stop_streaming(StreamContext *ctx) {
     
     if (ctx->appsrc) {
         gst_app_src_end_of_stream(GST_APP_SRC(ctx->appsrc));
+        gst_object_unref(ctx->appsrc);
+        ctx->appsrc = NULL;
     }
     
     if (ctx->pipeline) {
         gst_element_set_state(ctx->pipeline, GST_STATE_NULL);
         gst_object_unref(ctx->pipeline);
+        ctx->pipeline = NULL;
+    }
+    
+    if (ctx->rtsp_server) {
+        g_object_unref(ctx->rtsp_server);
+        ctx->rtsp_server = NULL;
     }
     
     if (ctx->loop) {
         g_main_loop_quit(ctx->loop);
         g_main_loop_unref(ctx->loop);
+        ctx->loop = NULL;
     }
     
     log_info("Streaming stopped");
