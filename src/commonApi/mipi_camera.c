@@ -52,6 +52,7 @@ typedef struct {
     int out_width;
     int out_height;
     int out_format;
+    int in_stride;
 } mipi_camera_t;
 
 /* 全局变量 */
@@ -168,16 +169,23 @@ static int v4l2_camera_init(mipi_camera_t *cam)
     }
     //vfmt.fmt.pix.width = 1920;//u32Width;
     //vfmt.fmt.pix.height = 1080;//u32Height;
-    cam->in_width = vfmt.fmt.pix.width;
-    cam->in_height = vfmt.fmt.pix.height;
-    cam->in_format = vfmt.fmt.pix.pixelformat;
+    if (cam->buff_Type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+        cam->in_width  = vfmt.fmt.pix_mp.width;
+        cam->in_height = vfmt.fmt.pix_mp.height;
+        cam->in_format = vfmt.fmt.pix_mp.pixelformat;
+    } else {
+        cam->in_width  = vfmt.fmt.pix.width;
+        cam->in_height = vfmt.fmt.pix.height;
+        cam->in_format = vfmt.fmt.pix.pixelformat;
+    }
+
     //vfmt.fmt.pix.pixelformat = cam->in_format; //根据实际情况设置格式
     vfmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
     //vfmt.fmt.pix.bytesperline = IMAGE_RATIO*u32Width;
     //vfmt.fmt.pix.sizeimage = IMAGE_RATIO*u32Width*u32Height;
     //vfmt.fmt.pix_mp.flags = V4L2_PIX_FMT_FLAG_SET_CSC;
     //vfmt.fmt.pix_mp.flags = V4L2_PIX_FMT_FLAG_PREMUL_ALPHA;
-    vfmt.fmt.pix_mp.quantization = V4L2_QUANTIZATION_FULL_RANGE;
+    //vfmt.fmt.pix_mp.quantization = V4L2_QUANTIZATION_FULL_RANGE;
     ret = ioctl(fd, VIDIOC_S_FMT, &vfmt);
     if(ret < 0) {
         perror("2. ioctl: VIDIOC_S_FMT fail");
@@ -189,10 +197,15 @@ static int v4l2_camera_init(mipi_camera_t *cam)
         close(fd);
         return -1;
     }
-    if(V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE == cam->buff_Type){
-        int plane_cnt = vfmt.fmt.pix_mp.num_planes;
-        printf("plane_cnt = %d\n", plane_cnt);
+    if (cam->buff_Type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+        cam->in_stride = vfmt.fmt.pix_mp.plane_fmt[0].bytesperline;
+        printf("plane_cnt = %d, stride = %d\n",
+            vfmt.fmt.pix_mp.num_planes,
+            cam->in_stride);
+    } else {
+        cam->in_stride = vfmt.fmt.pix.bytesperline;
     }
+
     
 #if 1
     printf("Current data format information:\n\twidth:%d\n\theight:%d\n\tfmt:%s\n", vfmt.fmt.pix.width, vfmt.fmt.pix.height, v4l2_fmt(vfmt.fmt.pix.pixelformat));
@@ -370,7 +383,7 @@ static int v4l2_camera_getframe(mipi_camera_t *cam, char *pbuf)
 	src.virAddr = cam->mptr[readbuffer.index];
 	src.mmuFlag = 1;
 	src.rotation = cam->rotation;
-	rga_set_rect(&src.rect, 0, 0, cam->in_width, cam->in_height, cam->in_width, cam->in_height, rga_fmt(cam->in_format));
+	rga_set_rect(&src.rect, 0, 0, cam->in_width, cam->in_height, cam->in_stride, cam->in_height, rga_fmt(cam->in_format));
 
 	rga_info_t dst;
 	memset(&dst, 0, sizeof(rga_info_t));
