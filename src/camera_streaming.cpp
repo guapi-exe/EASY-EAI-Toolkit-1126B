@@ -6,6 +6,8 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 #include <string>
+#include <thread>
+#include <chrono>
 
 extern "C" {
 #include "log.h"
