@@ -54,6 +54,7 @@ include (${algorithm_root}/face_detect_scrfd/api.cmake)
 include (${common_root}/base64/api.cmake)
 include (${common_root}/json/api.cmake)
 include (${media_root}/rga/api.cmake)
+include (${media_root}/gst_opt/api.cmake)
 
 ## api头文件路径
 set(api_inc 
@@ -66,6 +67,7 @@ set(api_inc
     ${FACE_DETECT_SCRFD_INCLUDE_DIRS}
     ${PERSON_DETECT_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
+    ${GSTOPT_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/json
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/tinyekf
@@ -107,7 +109,8 @@ link_directories(
    ${FACE_DETECT_LIBS_DIRS} 
    ${FACE_DETECT_RETIAN_LIBS_DIRS}
    ${FACE_DETECT_SCRFD_LIBS_DIRS}
-   ${PERSON_DETECT_LIBS_DIRS} 
+   ${PERSON_DETECT_LIBS_DIRS}
+   ${GSTOPT_LIBS_DIRS}
 )
 ## 依赖的动态库文件
 set(sysLib_list 
@@ -116,6 +119,7 @@ set(sysLib_list
     ${RGA_LIBS}
     ${PERSON_DETECT_LIBS} 
     ${FACE_DETECT_LIBS}
+    ${GSTOPT_LIBS}
     ${OpenCV_LIBS}
     rga 
     gpiod
@@ -169,3 +173,11 @@ target_include_directories(${camera_test_advanced_name} PRIVATE ${api_inc})
 #add_executable(${camera_test_scrfd_name} camera_test_scrfd.cpp ${face_detect_scrfd_srcs} ${face_detect_retian_srcs} ${api_srcs} ${common_api_srcs})
 #target_link_libraries(${camera_test_scrfd_name} ${retian_lib_list} ${CURL_LIBRARIES})
 #target_include_directories(${camera_test_scrfd_name} PRIVATE ${api_inc})
+
+#--------------------------
+# Camera Streaming executable
+#--------------------------
+set(camera_streaming_name camera_streaming)
+add_executable(${camera_streaming_name} camera_streaming.cpp ${api_srcs} ${common_api_srcs})
+target_link_libraries(${camera_streaming_name} ${sysLib_list} ${CURL_LIBRARIES})
+target_include_directories(${camera_streaming_name} PRIVATE ${api_inc})

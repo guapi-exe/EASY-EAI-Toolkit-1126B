@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摄像头直播播放器</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flv.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        
+        .player-section {
+            margin-bottom: 30px;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .controls {
+            margin-top: 20px;
+            display: grid;
+            gap: 15px;
+        }
+        
+        .control-group {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 10px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+        
+        input[type="text"], select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(245, 87, 108, 0.4);
+        }
+        
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-weight: 600;
+        }
+        
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .info-panel {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        
+        .info-panel h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .info-panel ul {
+            list-style: none;
+        }
+        
+        .info-panel li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e0e0e0;
+            color: #666;
+        }
+        
+        .info-panel li:last-child {
+            border-bottom: none;
+        }
+        
+        .info-panel code {
+            background: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #d63384;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📹 摄像头直播播放器</h1>
+        
+        <div class="player-section">
+            <div class="video-container">
+                <video id="videoPlayer" controls autoplay muted></video>
+            </div>
+            
+            <div class="controls">
+                <div class="control-group">
+                    <label for="streamType">流类型:</label>
+                    <select id="streamType">
+                        <option value="flv">HTTP-FLV (SRS)</option>
+                        <option value="hls">HLS (M3U8)</option>
+                        <option value="rtmp">RTMP (需要浏览器插件)</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <label for="streamUrl">流地址:</label>
+                    <input type="text" id="streamUrl" value="http://localhost:8080/live/stream.flv" placeholder="输入流地址">
+                </div>
+                
+                <div class="button-group">
+                    <button class="btn-primary" onclick="playStream()">▶ 播放</button>
+                    <button class="btn-danger" onclick="stopStream()">⏹ 停止</button>
+                </div>
+            </div>
+            
+            <div id="status" class="status info" style="display: none;"></div>
+        </div>
+        
+        <div class="info-panel">
+            <h3>📋 常用流地址</h3>
+            <ul>
+                <li><strong>SRS (HTTP-FLV):</strong> <code>http://localhost:8080/live/stream.flv</code></li>
+                <li><strong>SRS (HLS):</strong> <code>http://localhost:8080/live/stream.m3u8</code></li>
+                <li><strong>Nginx-RTMP (HLS):</strong> <code>http://localhost:8081/hls/stream.m3u8</code></li>
+                <li><strong>MediaMTX (HLS):</strong> <code>http://localhost:8888/mystream</code></li>
+            </ul>
+        </div>
+        
+        <div class="info-panel">
+            <h3>💡 使用说明</h3>
+            <ul>
+                <li>1. 确保流媒体服务器已启动 (使用 <code>./start_server.sh</code>)</li>
+                <li>2. 确保摄像头已开始推流 (使用 <code>./camera_streaming</code>)</li>
+                <li>3. 选择流类型并输入流地址</li>
+                <li>4. 点击"播放"按钮开始播放</li>
+                <li>5. HTTP-FLV 延迟最低，推荐使用</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        let player = null;
+        let flvPlayer = null;
+        let hlsPlayer = null;
+        
+        // 更新流地址
+        document.getElementById('streamType').addEventListener('change', function() {
+            const type = this.value;
+            const urlInput = document.getElementById('streamUrl');
+            
+            switch(type) {
+                case 'flv':
+                    urlInput.value = 'http://localhost:8080/live/stream.flv';
+                    break;
+                case 'hls':
+                    urlInput.value = 'http://localhost:8080/live/stream.m3u8';
+                    break;
+                case 'rtmp':
+                    urlInput.value = 'rtmp://localhost/live/stream';
+                    break;
+            }
+        });
+        
+        function showStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status ' + type;
+            status.style.display = 'block';
+        }
+        
+        function playStream() {
+            const streamType = document.getElementById('streamType').value;
+            const streamUrl = document.getElementById('streamUrl').value;
+            const videoElement = document.getElementById('videoPlayer');
+            
+            if (!streamUrl) {
+                showStatus('请输入流地址', 'error');
+                return;
+            }
+            
+            // 停止当前播放
+            stopStream();
+            
+            try {
+                if (streamType === 'flv') {
+                    playFLV(videoElement, streamUrl);
+                } else if (streamType === 'hls') {
+                    playHLS(videoElement, streamUrl);
+                } else if (streamType === 'rtmp') {
+                    showStatus('RTMP 需要浏览器插件支持，建议使用 HTTP-FLV 或 HLS', 'error');
+                }
+            } catch (error) {
+                showStatus('播放失败: ' + error.message, 'error');
+            }
+        }
+        
+        function playFLV(videoElement, url) {
+            if (flvjs.isSupported()) {
+                flvPlayer = flvjs.createPlayer({
+                    type: 'flv',
+                    url: url,
+                    isLive: true,
+                    hasAudio: false
+                });
+                
+                flvPlayer.attachMediaElement(videoElement);
+                flvPlayer.load();
+                flvPlayer.play();
+                
+                showStatus('正在播放 HTTP-FLV 流...', 'success');
+            } else {
+                showStatus('浏览器不支持 FLV 播放', 'error');
+            }
+        }
+        
+        function playHLS(videoElement, url) {
+            if (Hls.isSupported()) {
+                hlsPlayer = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: true
+                });
+                
+                hlsPlayer.loadSource(url);
+                hlsPlayer.attachMedia(videoElement);
+                
+                hlsPlayer.on(Hls.Events.MANIFEST_PARSED, function() {
+                    videoElement.play();
+                    showStatus('正在播放 HLS 流...', 'success');
+                });
+                
+                hlsPlayer.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        showStatus('HLS 播放错误: ' + data.type, 'error');
+                    }
+                });
+            } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari 原生支持
+                videoElement.src = url;
+                videoElement.play();
+                showStatus('正在播放 HLS 流...', 'success');
+            } else {
+                showStatus('浏览器不支持 HLS 播放', 'error');
+            }
+        }
+        
+        function stopStream() {
+            const videoElement = document.getElementById('videoPlayer');
+            
+            // 停止 FLV
+            if (flvPlayer) {
+                flvPlayer.pause();
+                flvPlayer.unload();
+                flvPlayer.detachMediaElement();
+                flvPlayer.destroy();
+                flvPlayer = null;
+            }
+            
+            // 停止 HLS
+            if (hlsPlayer) {
+                hlsPlayer.destroy();
+                hlsPlayer = null;
+            }
+            
+            // 清空视频
+            videoElement.pause();
+            videoElement.src = '';
+            videoElement.load();
+            
+            showStatus('播放已停止', 'info');
+        }
+        
+        // 页面卸载时清理
+        window.addEventListener('beforeunload', function() {
+            stopStream();
+        });
+    </script>
+</body>
+</html>
