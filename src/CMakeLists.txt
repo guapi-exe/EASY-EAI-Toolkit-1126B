@@ -79,6 +79,7 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/gpio/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/bypass_hardware_check.c
 )
 
 # RetinaFace 源文件
@@ -176,6 +177,7 @@ set(test_rknn_name test_rknn_init)
 add_executable(${test_rknn_name} 
     test_rknn_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/log.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/bypass_hardware_check.c
 )
 target_link_libraries(${test_rknn_name} ${PERSON_DETECT_LIBS} ${FACE_DETECT_LIBS})
 target_include_directories(${test_rknn_name} PRIVATE 
