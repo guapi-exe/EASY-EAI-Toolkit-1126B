@@ -66,8 +66,13 @@ int main() {
         }
     });
     
+    log_info("Starting CameraTask...");
+    camera.start();
+    
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
     TaskManager tm;
-    tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
+    //tm.addTask("CameraTask", [&](){ camera.start(); }, -5, std::chrono::seconds(1), true);
     tm.addTask("HeartbeatTask", [&](){ heartbeat.start(); }, 10, std::chrono::seconds(1), true);
     //tm.addTask("SerialTask", [&](){ serial.start(); }, 10, std::chrono::seconds(1), true);
     //tm.addTask("GPIOMonitorTask", [&](){ gpioMonitor.start(true); }, 10, std::chrono::seconds(1), true);
@@ -82,5 +87,9 @@ int main() {
     }
 
     log_info("System shutting down...");
+    
+    log_info("Stopping CameraTask...");
+    camera.stop();
+    
     return 0;
 }

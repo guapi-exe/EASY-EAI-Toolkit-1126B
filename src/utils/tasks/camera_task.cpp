@@ -128,7 +128,30 @@ void CameraTask::updateFPS() {
 
 void CameraTask::run() {
     log_info("CameraTask: starting camera task...");
+    log_info("CameraTask: working directory: %s", getcwd(NULL, 0));
+    log_info("CameraTask: person model path: %s", personModelPath.c_str());
+    log_info("CameraTask: face model path: %s", faceModelPath.c_str());
     
+    // 检查模型文件是否存在
+    FILE* fp = fopen(personModelPath.c_str(), "r");
+    if (fp) {
+        fclose(fp);
+        log_info("CameraTask: person model file exists");
+    } else {
+        log_error("CameraTask: person model file NOT found: %s", personModelPath.c_str());
+        return;
+    }
+    
+    fp = fopen(faceModelPath.c_str(), "r");
+    if (fp) {
+        fclose(fp);
+        log_info("CameraTask: face model file exists");
+    } else {
+        log_error("CameraTask: face model file NOT found: %s", faceModelPath.c_str());
+        return;
+    }
+    
+    log_info("CameraTask: loading person model...");
     rknn_context personCtx, faceCtx;
     if (person_detect_init(&personCtx, personModelPath.c_str()) != 0) {
         log_error("CameraTask: person_detect_init failed (model: %s)", personModelPath.c_str());
@@ -136,6 +159,7 @@ void CameraTask::run() {
     }
     log_info("CameraTask: person model loaded: %s", personModelPath.c_str());
     
+    log_info("CameraTask: loading face model...");
     if (face_detect_init(&faceCtx, faceModelPath.c_str()) != 0) {
         log_error("CameraTask: face_detect_init failed (model: %s)", faceModelPath.c_str());
         person_detect_release(personCtx);
