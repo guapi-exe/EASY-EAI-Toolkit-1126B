@@ -152,20 +152,40 @@ void CameraTask::run() {
     }
     
     log_info("CameraTask: loading person model...");
+    fflush(stdout);  // 强制刷新输出
+    fflush(stderr);
+    
+    auto start_time = std::chrono::steady_clock::now();
     rknn_context personCtx, faceCtx;
-    if (person_detect_init(&personCtx, personModelPath.c_str()) != 0) {
-        log_error("CameraTask: person_detect_init failed (model: %s)", personModelPath.c_str());
+    
+    int ret = person_detect_init(&personCtx, personModelPath.c_str());
+    
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start_time);
+    
+    if (ret != 0) {
+        log_error("CameraTask: person_detect_init failed with code %d (model: %s, time: %lds)", 
+                  ret, personModelPath.c_str(), elapsed.count());
         return;
     }
-    log_info("CameraTask: person model loaded: %s", personModelPath.c_str());
+    log_info("CameraTask: person model loaded successfully in %ld seconds", elapsed.count());
     
     log_info("CameraTask: loading face model...");
-    if (face_detect_init(&faceCtx, faceModelPath.c_str()) != 0) {
-        log_error("CameraTask: face_detect_init failed (model: %s)", faceModelPath.c_str());
+    fflush(stdout);
+    fflush(stderr);
+    
+    start_time = std::chrono::steady_clock::now();
+    ret = face_detect_init(&faceCtx, faceModelPath.c_str());
+    elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start_time);
+    
+    if (ret != 0) {
+        log_error("CameraTask: face_detect_init failed with code %d (model: %s, time: %lds)", 
+                  ret, faceModelPath.c_str(), elapsed.count());
         person_detect_release(personCtx);
         return;
     }
-    log_info("CameraTask: face model loaded: %s", faceModelPath.c_str());
+    log_info("CameraTask: face model loaded successfully in %ld seconds", elapsed.count());
     sort_init();
 
     set_upload_callback([this](const cv::Mat& img, int id, const std::string& type) {
