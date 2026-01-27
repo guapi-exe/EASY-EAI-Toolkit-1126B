@@ -531,8 +531,11 @@ int main(int argc, char** argv) {
         log_error("摄像头初始化失败!");
         return -1;
     }
-    mipicamera_set_format(CAMERA_INDEX_1, RK_FORMAT_RGB_888);
-    log_info("摄像头初始化成功");
+    mipicamera_set_format(CAMERA_INDEX_1, CAMERA_FORMAT);
+    log_info("摄像头初始化成功 (format: %s)", 
+             CAMERA_FORMAT == RK_FORMAT_YCbCr_420_SP ? "NV12" :
+             CAMERA_FORMAT == RK_FORMAT_BGR_888 ? "BGR888" :
+             CAMERA_FORMAT == RK_FORMAT_RGB_888 ? "RGB888" : "UNKNOWN");
     
     // 创建推流上下文
     StreamContext stream_ctx = {0};

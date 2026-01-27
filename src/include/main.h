@@ -7,7 +7,7 @@
 #define IMAGE_HEIGHT    720
 #define CAMERA_INDEX_1  11
 #define CAMERA_INDEX_2  51
-#define IMGRATIO        3
+#define CAMERA_FORMAT   RK_FORMAT_YCbCr_420_SP 
 #define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
 #define MAX_MISSED      30
 
