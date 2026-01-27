@@ -32,14 +32,21 @@ CameraTask::~CameraTask() {
 }
 
 void CameraTask::start() {
-    if (running) return;
+    if (running) {
+        log_warn("CameraTask: already running, ignoring start request");
+        return;
+    }
     running = true;
+    log_info("CameraTask: launching worker thread...");
     worker = thread(&CameraTask::run, this);
 }
 
 void CameraTask::stop() {
+    if (!running) return;
+    log_info("CameraTask: stopping...");
     running = false;
     if (worker.joinable()) worker.join();
+    log_info("CameraTask: stopped");
 }
 
 void CameraTask::setUploadCallback(UploadCallback cb) {
@@ -120,17 +127,21 @@ void CameraTask::updateFPS() {
 }
 
 void CameraTask::run() {
+    log_info("CameraTask: starting camera task...");
+    
     rknn_context personCtx, faceCtx;
     if (person_detect_init(&personCtx, personModelPath.c_str()) != 0) {
-        log_debug("CameraTask: person_detect_init failed");
+        log_error("CameraTask: person_detect_init failed (model: %s)", personModelPath.c_str());
         return;
     }
+    log_info("CameraTask: person model loaded: %s", personModelPath.c_str());
     
     if (face_detect_init(&faceCtx, faceModelPath.c_str()) != 0) {
-        log_debug("CameraTask: face_detect_init failed");
+        log_error("CameraTask: face_detect_init failed (model: %s)", faceModelPath.c_str());
         person_detect_release(personCtx);
         return;
     }
+    log_info("CameraTask: face model loaded: %s", faceModelPath.c_str());
     sort_init();
 
     set_upload_callback([this](const cv::Mat& img, int id, const std::string& type) {
@@ -139,22 +150,34 @@ void CameraTask::run() {
         }
     }, &capturedPersonIds, &capturedFaceIds);
     
+    log_info("CameraTask: initializing camera (index=%d, resolution=%dx%d)...", 
+             cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT);
+    
     if (mipicamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
-        log_debug("CameraTask: Camera init failed");
+        log_error("CameraTask: camera init failed (index=%d)", cameraIndex);
         person_detect_release(personCtx);
         face_detect_release(faceCtx);
         return;
     }
     mipicamera_set_format(cameraIndex, CAMERA_FORMAT);
+    log_info("CameraTask: camera initialized successfully (format=%s)",
+             CAMERA_FORMAT == RK_FORMAT_YCbCr_420_SP ? "NV12" :
+             CAMERA_FORMAT == RK_FORMAT_BGR_888 ? "BGR888" :
+             CAMERA_FORMAT == RK_FORMAT_RGB_888 ? "RGB888" : "UNKNOWN");
+    log_info("CameraTask: camera initialized successfully (format=%s)",
+             CAMERA_FORMAT == RK_FORMAT_YCbCr_420_SP ? "NV12" :
+             CAMERA_FORMAT == RK_FORMAT_BGR_888 ? "BGR888" :
+             CAMERA_FORMAT == RK_FORMAT_RGB_888 ? "RGB888" : "UNKNOWN");
    /*
    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
-        log_debug("CameraTask: Camera init failed");
+        log_error("CameraTask: USB camera init failed");
         person_detect_release(personCtx);
         face_detect_release(faceCtx);
         return;
     }
    */
 
+    log_info("CameraTask: starting main processing loop...");
     vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
@@ -171,9 +194,11 @@ void CameraTask::run() {
         processFrame(frame, personCtx, faceCtx);
     }
 
+    log_info("CameraTask: main loop exited, cleaning up...");
     mipicamera_exit(cameraIndex);
     person_detect_release(personCtx);
     face_detect_release(faceCtx);
+    log_info("CameraTask: cleanup completed");
 }
 
 void CameraTask::captureSnapshot() {
