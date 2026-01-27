@@ -384,7 +384,7 @@ static int v4l2_camera_getframe(mipi_camera_t *cam, char *pbuf)
 	src.mmuFlag = 1;
 	src.rotation = cam->rotation;
 	rga_set_rect(&src.rect, 0, 0, cam->in_width, cam->in_height, cam->in_stride, cam->in_height, rga_fmt(cam->in_format));
-
+    printf("in_fmt:%s,out_fmt:%s\n", v4l2_fmt(cam->in_format), v4l2_fmt(cam->out_format));
 	rga_info_t dst;
 	memset(&dst, 0, sizeof(rga_info_t));
 	dst.fd = -1;
