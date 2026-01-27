@@ -145,7 +145,7 @@ void CameraTask::run() {
         face_detect_release(faceCtx);
         return;
     }
-    
+    mipicamera_set_format(cameraIndex, CAMERA_FORMAT);
    /*
    if (usbcamera_init(cameraIndex, CAMERA_WIDTH, CAMERA_HEIGHT, 0) != 0) {
         log_debug("CameraTask: Camera init failed");
