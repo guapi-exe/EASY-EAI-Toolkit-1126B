@@ -173,7 +173,10 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 # RKNN Init Test executable
 #--------------------------
 set(test_rknn_name test_rknn_init)
-add_executable(${test_rknn_name} test_rknn_init.cpp)
+add_executable(${test_rknn_name} 
+    test_rknn_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/log.c
+)
 target_link_libraries(${test_rknn_name} ${PERSON_DETECT_LIBS} ${FACE_DETECT_LIBS})
 target_include_directories(${test_rknn_name} PRIVATE 
     ${PERSON_DETECT_INCLUDE_DIRS}
