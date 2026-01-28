@@ -150,33 +150,41 @@ static int process(int8_t* input, const int* anchors,
     float threshold_unsigmoid = unsigmoid(conf_threshold);
     int8_t threshold_qnt = qnt_f32_to_affine(threshold_unsigmoid, zero_point, scale);
     
+    // YOLO v5 输出布局: [anchor0_channel0, anchor0_channel1, ..., anchor1_channel0, ...]
+    // 每个anchor有6个通道: x, y, w, h, obj, class
     for (int anchor_idx = 0; anchor_idx < 3; anchor_idx++) {
         for (int h = 0; h < grid_h; h++) {
             for (int w = 0; w < grid_w; w++) {
-                int base_idx = w + anchor_idx * grid_len * 6 + h * grid_w;
-                int8_t* ptr = input + base_idx;
+                // 计算当前网格点的基础索引
+                int grid_idx = h * grid_w + w;
+                int anchor_base = anchor_idx * 6 * grid_len; // 当前anchor的起始位置
                 
-                int8_t obj_score_qnt = ptr[(anchor_idx * 6 + 4) * grid_len];
+                // 获取objectness分数
+                int8_t obj_score_qnt = input[anchor_base + 4 * grid_len + grid_idx];
                 if (obj_score_qnt <= threshold_qnt) continue;
                 
-                float box_x = deqnt_affine_to_f32(scale, ptr[0], zero_point);
+                // 解码边界框坐标
+                float box_x = deqnt_affine_to_f32(scale, input[anchor_base + 0 * grid_len + grid_idx], zero_point);
                 box_x = (sigmoid(box_x) * 2.0f - 0.5f);
                 
-                float box_y = deqnt_affine_to_f32(scale, ptr[grid_len], zero_point);
+                float box_y = deqnt_affine_to_f32(scale, input[anchor_base + 1 * grid_len + grid_idx], zero_point);
                 box_y = (sigmoid(box_y) * 2.0f - 0.5f);
                 
-                float box_w = deqnt_affine_to_f32(scale, ptr[grid_len * 2], zero_point);
+                float box_w = deqnt_affine_to_f32(scale, input[anchor_base + 2 * grid_len + grid_idx], zero_point);
                 box_w = sigmoid(box_w) * 2.0f;
                 box_w = box_w * box_w * anchors[anchor_idx * 2];
                 
-                float box_h = deqnt_affine_to_f32(scale, ptr[grid_len * 3], zero_point);
+                float box_h = deqnt_affine_to_f32(scale, input[anchor_base + 3 * grid_len + grid_idx], zero_point);
                 box_h = sigmoid(box_h) * 2.0f;
                 box_h = box_h * box_h * anchors[anchor_idx * 2 + 1];
                 
-                box_x = ((float)w + box_x) * stride - box_w / 2.0f;
-                box_y = ((float)h + box_y) * stride - box_h / 2.0f;
+                box_x = ((float)w + box_x) * stride;
+                box_y = ((float)h + box_y) * stride;
+                box_x -= box_w / 2.0f;
+                box_y -= box_h / 2.0f;
                 
-                int8_t class_score_qnt = ptr[grid_len * 5];
+                // 获取类别分数
+                int8_t class_score_qnt = input[anchor_base + 5 * grid_len + grid_idx];
                 
                 if (class_score_qnt > threshold_qnt) {
                     float obj_score = sigmoid(deqnt_affine_to_f32(scale, obj_score_qnt, zero_point));
