@@ -29,7 +29,6 @@ set(OpenCV_LIBS
 
 # face_detect 源文件（使用.a库的解密 + 自编译的完整检测逻辑）
 set(FACE_DETECT_SOURCE_DIRS
-    ${CMAKE_CURRENT_LIST_DIR}/hardward_verify_override.c
     ${CMAKE_CURRENT_LIST_DIR}/generator.cpp
     ${CMAKE_CURRENT_LIST_DIR}/tools.cpp
     ${CMAKE_CURRENT_LIST_DIR}/decode.cpp

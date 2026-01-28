@@ -72,6 +72,7 @@ file(GLOB api_srcs
     ${RGA_SOURCE_DIRS}
     ${PERSON_DETECT_SOURCE_DIRS}
     ${FACE_DETECT_SOURCE_DIRS}
+    ${common_root}/hardward_verify_override.c
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp

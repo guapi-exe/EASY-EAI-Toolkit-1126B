@@ -27,9 +27,8 @@ set(OpenCV_LIBS
 #    opencv_video  
 )
 
-# person_detect 源文件（混合模式：使用.a库的解密 + 自编译的检测逻辑 + 覆盖硬件验证）
+# person_detect 源文件（混合模式：使用.a库的解密 + 自编译的检测逻辑）
 set(PERSON_DETECT_SOURCE_DIRS
-    ${CMAKE_CURRENT_LIST_DIR}/hardward_verify_override.c
     ${CMAKE_CURRENT_LIST_DIR}/person_detect.cpp
     ${CMAKE_CURRENT_LIST_DIR}/person_detect_postprocess.cpp
 )
