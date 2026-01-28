@@ -93,7 +93,13 @@ static int scale_coords(detect_result_group_t* group, int img_w, int img_h, int 
     return 0;
 }
 
-// ========== 加载模型（直接加载，无加密）==========
+// ========== 加载模型（使用原始库的解密函数）==========
+
+// 声明原始库中的解密函数
+extern "C" {
+    int decrypte_init(uint16_t param);
+    int decrypte_model(const void* src, void* dest, int size);
+}
 
 static void* load_model(const char* path, int* size) {
     FILE* fp = fopen(path, "rb");
@@ -119,6 +125,25 @@ static void* load_model(const char* path, int* size) {
     return data;
 }
 
+// 解密模型数据
+static void* decrypt_model_data(void* encrypted_data, int encrypted_size, int* decrypted_size) {
+    // 分配解密后的缓冲区
+    void* decrypted_data = malloc(encrypted_size);
+    if (!decrypted_data) {
+        return nullptr;
+    }
+    
+    // 调用原始库的解密函数
+    int ret = decrypte_model(encrypted_data, decrypted_data, encrypted_size);
+    if (ret != 0) {
+        free(decrypted_data);
+        return nullptr;
+    }
+    
+    *decrypted_size = encrypted_size - 4; // 解密后数据大小（去掉4字节头）
+    return decrypted_data;
+}
+
 // ========== 公共API实现 ==========
 
 int person_detect_init(rknn_context* ctx, const char* model_path) {
@@ -126,18 +151,34 @@ int person_detect_init(rknn_context* ctx, const char* model_path) {
         return -1;
     }
     
-    int model_size = 0;
-    void* model_data = load_model(model_path, &model_size);
+    // 初始化解密模块（绕过硬件验证）
+    decrypte_init(0);
     
-    if (!model_data) {
+    // 加载加密的模型文件
+    int encrypted_size = 0;
+    void* encrypted_data = load_model(model_path, &encrypted_size);
+    
+    if (!encrypted_data) {
         printf("Failed to load model: %s\n", model_path);
         return -1;
     }
     
-    printf("Loading RKNN model...\n");
-    int ret = rknn_init(ctx, model_data, model_size, 0, nullptr);
+    // 解密模型数据
+    int decrypted_size = 0;
+    void* decrypted_data = decrypt_model_data(encrypted_data, encrypted_size, &decrypted_size);
     
-    free(model_data);
+    free(encrypted_data); // 释放加密数据
+    
+    if (!decrypted_data) {
+        printf("Failed to decrypt model\n");
+        return -1;
+    }
+    
+    // 使用解密后的数据初始化RKNN
+    printf("Loading RKNN model (decrypted %d bytes)...\n", decrypted_size);
+    int ret = rknn_init(ctx, decrypted_data, decrypted_size, 0, nullptr);
+    
+    free(decrypted_data); // 释放解密数据
     
     if (ret < 0) {
         printf("rknn_init failed with code: %d\n", ret);
