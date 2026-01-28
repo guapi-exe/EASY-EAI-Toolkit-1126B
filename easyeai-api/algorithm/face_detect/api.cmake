@@ -7,8 +7,8 @@ set(OpenCV_INCLUDE_DIRS
     ${CMAKE_SYSROOT}/usr/include/opencv4/ 
 )
 set(OpenCV_LIBS_DIRS
-    ${CAMKE_SYSROOT}/usr/lib/aarch64-linux-gnu/lapack
-    ${CAMKE_SYSROOT}/usr/lib/aarch64-linux-gnu/blas
+    ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu/lapack
+    ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu/blas
 )
 set(OpenCV_LIBS
     opencv_core 
@@ -27,6 +27,15 @@ set(OpenCV_LIBS
 #    opencv_video  
 )
 
+# face_detect 源文件（使用.a库的解密 + 自编译的完整检测逻辑）
+set(FACE_DETECT_SOURCE_DIRS
+    ${CMAKE_CURRENT_LIST_DIR}/hardward_verify_override.c
+    ${CMAKE_CURRENT_LIST_DIR}/generator.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/tools.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/decode.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/face_detect.cpp
+)
+
 # static Library paths
 set(FACE_DETECT_LIBS_DIRS
     ${CMAKE_CURRENT_LIST_DIR}
@@ -39,7 +48,7 @@ set(FACE_DETECT_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR} 
     )
 
-# c/c++ flags
+# c/c++ flags（包含原始.a库仅用于解密功能：decrypte_init和decrypte_model）
 set(FACE_DETECT_LIBS 
     face_detect
     rknnrt

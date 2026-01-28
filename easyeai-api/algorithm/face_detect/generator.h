@@ -1,13 +1,8 @@
 #ifndef GENERATOR_H
 #define GENERATOR_H
 
-#include <string.h>
 #include <vector>
-#include <iostream>
-#include <cmath>
-#include<opencv2/opencv.hpp>
-#include "generator.h"
-
+#include <opencv2/opencv.hpp>
 
 using namespace std;
 

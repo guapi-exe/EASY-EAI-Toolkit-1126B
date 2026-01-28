@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include "rknn_api.h"
 
-
-
 class det {
 public:
     det(){

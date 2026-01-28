@@ -71,6 +71,7 @@ file(GLOB api_srcs
     ${CJSON_SOURCE_DIRS}
     ${RGA_SOURCE_DIRS}
     ${PERSON_DETECT_SOURCE_DIRS}
+    ${FACE_DETECT_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp

@@ -1,7 +1,10 @@
 #ifndef TOOLS_H
 #define TOOLS_H
-#include "face_detect.h"
 #include <opencv2/opencv.hpp>
+#include <vector>
+
+// 前向声明
+class det;
 
 
 struct Transform_info

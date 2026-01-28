@@ -1,5 +1,5 @@
 #ifndef DECODE_H
-#define DEOCDE_H
+#define DECODE_H
 
 #include <opencv2/opencv.hpp>
 #include <stdio.h>
