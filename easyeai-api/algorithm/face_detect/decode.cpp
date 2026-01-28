@@ -60,7 +60,7 @@ void decode_box_and_landmark(float* confident,
             
             // 解码人脸关键点
             float* landmark_offset = predict + (i * 10);  // 每个prior有10个关键点值
-            decode_landmark(landmark_offset, prior_data[i], detection.keypoints);
+            decode_landmark(landmark_offset, prior_data[i], detection.landmarks);
             
             // 设置置信度
             detection.score = face_score;
