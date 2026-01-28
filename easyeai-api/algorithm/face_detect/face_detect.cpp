@@ -23,37 +23,6 @@ extern "C" {
     int decrypte_init(uint16_t param1, int param2);
     int decrypte_model(const void* src, void* dest, int size);
 }
-    if (src.empty() || target_w <= 0 || target_h <= 0) {
-        return;
-    }
-    
-    int src_w = src.cols;
-    int src_h = src.rows;
-    
-    float scale = std::min((float)target_w / (float)src_w, 
-                           (float)target_h / (float)src_h);
-    
-    info->scale = scale;
-    
-    int new_w = (int)(src_w * scale);
-    int new_h = (int)(src_h * scale);
-    
-    int pad_w = target_w - new_w;
-    int pad_h = target_h - new_h;
-    
-    info->pad_left = pad_w / 2;
-    info->pad_top = pad_h / 2;
-    info->pad_right = pad_w - info->pad_left;
-    info->pad_bottom = pad_h - info->pad_top;
-    
-    cv::Mat resized;
-    cv::resize(src, resized, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
-    
-    cv::copyMakeBorder(resized, dst, 
-                       info->pad_top, info->pad_bottom,
-                       info->pad_left, info->pad_right,
-                       cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
-}
 
 // 加载模型文件
 static void* load_model(const char* path, int* size) {
@@ -237,13 +206,4 @@ int face_detect_run(rknn_context ctx, cv::Mat& img, std::vector<det>& dets) {
     rknn_outputs_release(ctx, 3, outputs);
     
     return (int)dets.size();
-}
-
-// 时间戳函数
-double what_time_is_it_now() {
-    struct timeval tv;
-    if (gettimeofday(&tv, nullptr) == 0) {
-        return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
-    }
-    return 0.0;
 }
