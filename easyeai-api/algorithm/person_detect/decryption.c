@@ -59,10 +59,11 @@ int decrypte_model(const void *param_1, void *param_2, int param_3) {
     int out_idx = 0;
     
     // 逐块处理，每块进行字节序翻转
+    // 原始映射: dest[block_size - i] = src[i] (i从0到block_size)
     for (int b = 0; b < num_blocks; b++) {
         for (int i = 0; i < step; i++) {
-            // 将源块的末尾字节放入目标块的起始位置
-            dest[out_idx + i] = data_ptr[out_idx + (block_size - i)];
+            // 正确的映射关系：将源块的第i字节放入目标块的倒数第i位置
+            dest[out_idx + (step - 1 - i)] = data_ptr[out_idx + i];
         }
         out_idx += step;
     }
