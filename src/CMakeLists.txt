@@ -70,6 +70,7 @@ file(GLOB api_srcs
     ${BASE64_SOURCE_DIRS} 
     ${CJSON_SOURCE_DIRS}
     ${RGA_SOURCE_DIRS}
+    ${PERSON_DETECT_SOURCE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp
@@ -79,8 +80,6 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/gpio/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/usb_camera/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/*.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/bypass_hardware_check.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/opencv_compat.cpp
 )
 
 # RetinaFace 源文件
@@ -100,6 +99,7 @@ link_directories(
    ${FACE_DETECT_SCRFD_LIBS_DIRS}
    ${PERSON_DETECT_LIBS_DIRS}
    ${GSTOPT_LIBS_DIRS}
+   ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu
 )
 ## 依赖的动态库文件
 set(sysLib_list 
@@ -174,17 +174,16 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 #--------------------------
 # RKNN Init Test executable
 #--------------------------
-set(test_rknn_name test_rknn_init)
-add_executable(${test_rknn_name} 
-    test_rknn_init.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/log.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/bypass_hardware_check.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/opencv_compat.cpp
-)
-target_link_libraries(${test_rknn_name} ${PERSON_DETECT_LIBS} ${FACE_DETECT_LIBS} ${OpenCV_LIBRARIES})
-target_include_directories(${test_rknn_name} PRIVATE 
-    ${PERSON_DETECT_INCLUDE_DIRS}
-    ${FACE_DETECT_INCLUDE_DIRS}
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
-    ${OpenCV_INCLUDE_DIRS}
-)
+#set(test_rknn_name test_rknn_init)
+#add_executable(${test_rknn_name} 
+#    ${PERSON_DETECT_SOURCE_DIRS}
+#    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs/log.check.c
+#    ${CMAKE_CURRENT_SOURCE_DIR}/opencv_compat.cpp
+#)
+#target_link_libraries(${test_rknn_name} ${PERSON_DETECT_LIBS} ${FACE_DETECT_LIBS} ${OpenCV_LIBRARIES})
+#target_include_directories(${test_rknn_name} PRIVATE 
+#    ${PERSON_DETECT_INCLUDE_DIRS}
+#    ${FACE_DETECT_INCLUDE_DIRS}
+#    ${CMAKE_CURRENT_SOURCE_DIR}/libs/logs
+#    ${OpenCV_INCLUDE_DIRS}
+#)

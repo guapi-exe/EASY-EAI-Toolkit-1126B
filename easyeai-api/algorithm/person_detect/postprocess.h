@@ -34,6 +34,20 @@ typedef struct _detect_result_group_t
     detect_result_t results[OBJ_NUMB_MAX_SIZE];
 } detect_result_group_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int person_post_process(int8_t* input0, int8_t* input1, int8_t* input2,
+                        int model_in_w, int model_in_h,
+                        float conf_threshold, float nms_threshold,
+                        std::vector<int>& qnt_zps,
+                        std::vector<float>& qnt_scales,
+                        detect_result_group_t* group);
 
 void deinitPostProcess();
+
+#ifdef __cplusplus
+}
+#endif
 #endif //_RKNN_ZERO_COPY_DEMO_POSTPROCESS_H_
