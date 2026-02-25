@@ -39,6 +39,7 @@ void UploaderTask::run() {
         // 假设返回 "code":0 成功，否则重试
         if (resp != "0" && item.retry < 3) {
             item.retry++;
+            log_info("UploaderTask: upload failed, retrying (%d/3)", item.retry);
             enqueue(item.img, item.cameraNumber, item.type, item.path);
         }
     }
