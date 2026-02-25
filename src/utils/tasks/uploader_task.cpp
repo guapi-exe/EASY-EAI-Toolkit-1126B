@@ -94,6 +94,6 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const
     curl_slist_free_all(headers);
     curl_mime_free(form);
     curl_easy_cleanup(curl);
-
+    log_debug("response code %ld, curl result %d", response_code, res);
     return (res == CURLE_OK && response_code == 200) ? "0" : "1";
 }
