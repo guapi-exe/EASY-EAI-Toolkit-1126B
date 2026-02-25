@@ -26,6 +26,7 @@ public:
     void enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
 
 private:
+    void enqueue(const UploadItem& item);
     void run();
     std::string uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
     std::string eqCode;

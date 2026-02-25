@@ -26,6 +26,12 @@ void UploaderTask::enqueue(const cv::Mat& img, int cameraNumber, const std::stri
     cv.notify_one();
 }
 
+void UploaderTask::enqueue(const UploadItem& item) {
+    std::lock_guard<std::mutex> lock(mtx);
+    queue.push(item);
+    cv.notify_one();
+}
+
 void UploaderTask::run() {
     while (running) {
         std::unique_lock<std::mutex> lock(mtx);
@@ -40,7 +46,7 @@ void UploaderTask::run() {
         if (resp != "0" && item.retry < 3) {
             item.retry++;
             log_info("UploaderTask: upload failed, retrying (%d/3)", item.retry);
-            enqueue(item.img, item.cameraNumber, item.type, item.path);
+            enqueue(item);
         }
     }
 }
