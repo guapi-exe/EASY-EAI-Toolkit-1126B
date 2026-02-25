@@ -33,7 +33,7 @@ CameraTask::~CameraTask() {
 
 void CameraTask::start() {
     if (running) {
-        log_warn("CameraTask: already running, ignoring start request");
+        //log_warn("CameraTask: already running, ignoring start request");
         return;
     }
     running = true;
