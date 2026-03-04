@@ -168,10 +168,10 @@ target_include_directories(${project_name} PRIVATE ${api_inc})
 #--------------------------
 # Camera Streaming executable
 #--------------------------
-set(camera_streaming_name camera_streaming)
-add_executable(${camera_streaming_name} camera_streaming.cpp ${api_srcs} ${common_api_srcs})
-target_link_libraries(${camera_streaming_name} ${sysLib_list} ${CURL_LIBRARIES})
-target_include_directories(${camera_streaming_name} PRIVATE ${api_inc})
+#set(camera_streaming_name camera_streaming)
+#add_executable(${camera_streaming_name} camera_streaming.cpp ${api_srcs} ${common_api_srcs})
+#target_link_libraries(${camera_streaming_name} ${sysLib_list} ${CURL_LIBRARIES})
+#target_include_directories(${camera_streaming_name} PRIVATE ${api_inc})
 
 #--------------------------
 # RKNN Init Test executable
