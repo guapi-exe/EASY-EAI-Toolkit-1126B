@@ -5,6 +5,7 @@
 #include <atomic>
 #include <functional>
 #include <unordered_set>
+#include <unordered_map>
 #include <string>
 #include <chrono>
 
@@ -56,4 +57,7 @@ private:
     
     // RGA硬件加速缓冲区
     unsigned char* resized_buffer_720p{nullptr};
+
+    // 运动稳定性：记录每个track上一次中心点（720p坐标）
+    std::unordered_map<int, cv::Point2f> lastTrackCenters;
 };

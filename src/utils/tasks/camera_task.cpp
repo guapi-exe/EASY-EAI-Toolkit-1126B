@@ -264,6 +264,9 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
+    constexpr double kMinClarityForCapture = 120.0;
+    constexpr float kMaxMotionRatioForCapture = 0.012f;
+
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
     
@@ -299,7 +302,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     */
     
     Mat resized_frame;
-    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_NEAREST);
+    cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
 
     detect_result_group_t detect_result_group;
     person_detect_run(personCtx, resized_frame, &detect_result_group);
@@ -325,10 +328,23 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     }
 
     vector<Track> tracks = sort_update(dets);
+    std::unordered_set<int> activeTrackIds;
 
     for (auto& t : tracks) {
+        activeTrackIds.insert(t.id);
+
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
         if (bbox_720p.width <=0 || bbox_720p.height <=0) continue;
+
+        cv::Point2f curr_center_720p(bbox_720p.x + bbox_720p.width * 0.5f,
+                                     bbox_720p.y + bbox_720p.height * 0.5f);
+        float motion_ratio = 0.0f;
+        auto prev_it = lastTrackCenters.find(t.id);
+        if (prev_it != lastTrackCenters.end()) {
+            float pixel_motion = cv::norm(curr_center_720p - prev_it->second);
+            motion_ratio = pixel_motion / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
+        }
+        lastTrackCenters[t.id] = curr_center_720p;
         
         // 将720p的bbox映射回4K坐标系，用于从原图截取高质量ROI
         int orig_x = static_cast<int>(bbox_720p.x / scale_x);
@@ -380,8 +396,12 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
             if (area_ratio > 0.05f) {
+                if (motion_ratio > kMaxMotionRatioForCapture) {
+                    continue;
+                }
+
                 double current_clarity = computeFocusMeasure(person_roi_resized);
-                if (current_clarity > 50) {
+                if (current_clarity > kMinClarityForCapture) {
                     std::vector<det> face_result;
                     int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
 
@@ -475,6 +495,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                     }
                 }
             }
+        }
+    }
+
+    for (auto it = lastTrackCenters.begin(); it != lastTrackCenters.end(); ) {
+        if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
+            it = lastTrackCenters.erase(it);
+        } else {
+            ++it;
         }
     }
 }
