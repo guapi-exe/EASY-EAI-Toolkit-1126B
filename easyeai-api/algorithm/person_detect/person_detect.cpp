@@ -11,6 +11,72 @@
 #include <cstdio>
 #include <cstdlib>
 
+struct person_model_cache_t {
+    bool valid = false;
+    rknn_context ctx = 0;
+    uint32_t n_input = 0;
+    uint32_t n_output = 0;
+    int model_w = 0;
+    int model_h = 0;
+    int model_c = 0;
+    std::vector<int> qnt_zps;
+    std::vector<float> qnt_scales;
+};
+
+static person_model_cache_t g_model_cache;
+
+static int build_model_cache(rknn_context ctx) {
+    rknn_input_output_num io_num;
+    int ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+    if (ret < 0) {
+        return -1;
+    }
+
+    std::vector<rknn_tensor_attr> input_attrs(io_num.n_input);
+    for (uint32_t i = 0; i < io_num.n_input; i++) {
+        input_attrs[i].index = i;
+        ret = rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &input_attrs[i], sizeof(rknn_tensor_attr));
+        if (ret < 0) {
+            return -1;
+        }
+    }
+
+    std::vector<rknn_tensor_attr> output_attrs(io_num.n_output);
+    for (uint32_t i = 0; i < io_num.n_output; i++) {
+        output_attrs[i].index = i;
+        ret = rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &output_attrs[i], sizeof(rknn_tensor_attr));
+        if (ret < 0) {
+            return -1;
+        }
+    }
+
+    g_model_cache.valid = true;
+    g_model_cache.ctx = ctx;
+    g_model_cache.n_input = io_num.n_input;
+    g_model_cache.n_output = io_num.n_output;
+
+    if (input_attrs[0].fmt == RKNN_TENSOR_NCHW) {
+        g_model_cache.model_c = input_attrs[0].dims[1];
+        g_model_cache.model_h = input_attrs[0].dims[2];
+        g_model_cache.model_w = input_attrs[0].dims[3];
+    } else {
+        g_model_cache.model_h = input_attrs[0].dims[1];
+        g_model_cache.model_w = input_attrs[0].dims[2];
+        g_model_cache.model_c = input_attrs[0].dims[3];
+    }
+
+    g_model_cache.qnt_zps.clear();
+    g_model_cache.qnt_scales.clear();
+    g_model_cache.qnt_zps.reserve(io_num.n_output);
+    g_model_cache.qnt_scales.reserve(io_num.n_output);
+    for (uint32_t i = 0; i < io_num.n_output; i++) {
+        g_model_cache.qnt_zps.push_back(output_attrs[i].zp);
+        g_model_cache.qnt_scales.push_back(output_attrs[i].scale);
+    }
+
+    return 0;
+}
+
 // ========== Letter Box 图像预处理（OpenCV 4.6兼容）==========
 
 static int letter_box(const cv::Mat& src, cv::Mat& dst, int target_size) {
@@ -184,12 +250,21 @@ int person_detect_init(rknn_context* ctx, const char* model_path) {
         printf("rknn_init failed with code: %d\n", ret);
         return -1;
     }
+
+    if (build_model_cache(*ctx) < 0) {
+        printf("build model cache failed\n");
+        rknn_destroy(*ctx);
+        return -1;
+    }
     
     printf("RKNN model loaded successfully\n");
     return 0;
 }
 
 int person_detect_release(rknn_context ctx) {
+    if (g_model_cache.valid && g_model_cache.ctx == ctx) {
+        g_model_cache = person_model_cache_t();
+    }
     return rknn_destroy(ctx);
 }
 
@@ -201,54 +276,18 @@ int person_detect_run(rknn_context ctx, cv::Mat input_image, detect_result_group
     int img_h = input_image.rows;
     int img_w = input_image.cols;
     
-    // 查询输入输出数量
-    rknn_input_output_num io_num;
-    int ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
-    if (ret < 0) {
-        printf("rknn_query failed\n");
-        return -1;
-    }
-    
-    uint32_t n_input = io_num.n_input;
-    uint32_t n_output = io_num.n_output;
-    
-    // 查询输入属性
-    std::vector<rknn_tensor_attr> input_attrs(n_input);
-    for (uint32_t i = 0; i < n_input; i++) {
-        input_attrs[i].index = i;
-        ret = rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &input_attrs[i], sizeof(rknn_tensor_attr));
-        if (ret < 0) {
+    if (!g_model_cache.valid || g_model_cache.ctx != ctx) {
+        if (build_model_cache(ctx) < 0) {
+            printf("build model cache failed in run\n");
             return -1;
         }
-    }
-    
-    // 查询输出属性
-    std::vector<rknn_tensor_attr> output_attrs(n_output);
-    for (uint32_t i = 0; i < n_output; i++) {
-        output_attrs[i].index = i;
-        ret = rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &output_attrs[i], sizeof(rknn_tensor_attr));
-        if (ret < 0) {
-            return -1;
-        }
-    }
-    
-    // 获取模型输入尺寸
-    int model_w, model_h, model_c;
-    if (input_attrs[0].fmt == RKNN_TENSOR_NCHW) {
-        model_c = input_attrs[0].dims[1];
-        model_h = input_attrs[0].dims[2];
-        model_w = input_attrs[0].dims[3];
-    } else {
-        model_h = input_attrs[0].dims[1];
-        model_w = input_attrs[0].dims[2];
-        model_c = input_attrs[0].dims[3];
     }
     
     // 图像预处理
     cv::Mat letterboxed;
     cv::Mat rgb_img;
     
-    letter_box(input_image, letterboxed, model_h);
+    letter_box(input_image, letterboxed, g_model_cache.model_h);
     cv::cvtColor(letterboxed, rgb_img, cv::COLOR_BGR2RGB);
     
     // 设置输入
@@ -256,11 +295,11 @@ int person_detect_run(rknn_context ctx, cv::Mat input_image, detect_result_group
     memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
     inputs[0].type = RKNN_TENSOR_UINT8;
-    inputs[0].size = model_w * model_h * model_c;
+    inputs[0].size = g_model_cache.model_w * g_model_cache.model_h * g_model_cache.model_c;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
     inputs[0].buf = rgb_img.data;
     
-    ret = rknn_inputs_set(ctx, n_input, inputs);
+    int ret = rknn_inputs_set(ctx, g_model_cache.n_input, inputs);
     if (ret < 0) {
         return -1;
     }
@@ -272,23 +311,15 @@ int person_detect_run(rknn_context ctx, cv::Mat input_image, detect_result_group
     }
     
     // 获取输出
-    std::vector<rknn_output> outputs(n_output);
-    memset(outputs.data(), 0, sizeof(rknn_output) * n_output);
-    for (uint32_t i = 0; i < n_output; i++) {
+    std::vector<rknn_output> outputs(g_model_cache.n_output);
+    memset(outputs.data(), 0, sizeof(rknn_output) * g_model_cache.n_output);
+    for (uint32_t i = 0; i < g_model_cache.n_output; i++) {
         outputs[i].want_float = 0;
     }
     
-    ret = rknn_outputs_get(ctx, n_output, outputs.data(), nullptr);
+    ret = rknn_outputs_get(ctx, g_model_cache.n_output, outputs.data(), nullptr);
     if (ret < 0) {
         return -1;
-    }
-    
-    // 收集量化参数
-    std::vector<int> qnt_zps;
-    std::vector<float> qnt_scales;
-    for (uint32_t i = 0; i < n_output; i++) {
-        qnt_zps.push_back(output_attrs[i].zp);
-        qnt_scales.push_back(output_attrs[i].scale);
     }
     
     // 后处理
@@ -296,17 +327,17 @@ int person_detect_run(rknn_context ctx, cv::Mat input_image, detect_result_group
         (int8_t*)outputs[0].buf,
         (int8_t*)outputs[1].buf,
         (int8_t*)outputs[2].buf,
-        model_w, model_h,
+        g_model_cache.model_w, g_model_cache.model_h,
         BOX_THRESH, NMS_THRESH,
-        qnt_zps, qnt_scales,
+        g_model_cache.qnt_zps, g_model_cache.qnt_scales,
         detect_result_group
     );
     
     // 坐标还原到原图
-    scale_coords(detect_result_group, img_w, img_h, model_h);
+    scale_coords(detect_result_group, img_w, img_h, g_model_cache.model_h);
     
     // 释放输出
-    rknn_outputs_release(ctx, n_output, outputs.data());
+    rknn_outputs_release(ctx, g_model_cache.n_output, outputs.data());
     
     return 0;
 }

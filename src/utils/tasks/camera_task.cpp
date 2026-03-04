@@ -426,6 +426,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                 float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
 
                 det best_face = face_result[best_idx];
+                if (best_face.score < CAPTURE_MIN_FACE_SCORE) {
+                    continue;
+                }
                 best_face.box.x *= face_scale_x;
                 best_face.box.y *= face_scale_y;
                 best_face.box.width *= face_scale_x;
@@ -444,6 +447,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                               static_cast<int>(best_face.box.y),
                               static_cast<int>(best_face.box.width),
                               static_cast<int>(best_face.box.height));
+                base_fbox.x = std::max(0, std::min(base_fbox.x, person_roi.cols - 1));
+                base_fbox.y = std::max(0, std::min(base_fbox.y, person_roi.rows - 1));
+                base_fbox.width = std::min(base_fbox.width, person_roi.cols - base_fbox.x);
+                base_fbox.height = std::min(base_fbox.height, person_roi.rows - base_fbox.y);
                 if (base_fbox.width <= 0 || base_fbox.height <= 0) {
                     continue;
                 }

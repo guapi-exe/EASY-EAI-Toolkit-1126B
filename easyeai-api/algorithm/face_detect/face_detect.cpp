@@ -133,6 +133,8 @@ int face_detect_run(rknn_context ctx, cv::Mat& img, std::vector<det>& dets) {
     if (img.empty()) {
         return -1;
     }
+
+    dets.clear();
     
     // Letter box预处理
     cv::Mat letterboxed;
@@ -189,16 +191,30 @@ int face_detect_run(rknn_context ctx, cv::Mat& img, std::vector<det>& dets) {
     
     decode_box_and_landmark(confident, loc, predict, 0.4f, 0.4f, prior_data, dets);
     
-    // 坐标变换回原图（检测结果是归一化坐标[0,1]，需要先乘以300，再减去padding，最后除以ratio恢复原图尺寸）
+    // 坐标变换回原图：先从300映射回padded坐标，再减padding
     for (size_t i = 0; i < dets.size(); i++) {
-        dets[i].box.x = (dets[i].box.x * 300.0f - transform_info.left) * transform_info.ratio;
-        dets[i].box.y = (dets[i].box.y * 300.0f - transform_info.top) * transform_info.ratio;
+        dets[i].box.x = dets[i].box.x * 300.0f * transform_info.ratio - transform_info.left;
+        dets[i].box.y = dets[i].box.y * 300.0f * transform_info.ratio - transform_info.top;
         dets[i].box.width = dets[i].box.width * 300.0f * transform_info.ratio;
         dets[i].box.height = dets[i].box.height * 300.0f * transform_info.ratio;
+
+        if (dets[i].box.x < 0.0f) dets[i].box.x = 0.0f;
+        if (dets[i].box.y < 0.0f) dets[i].box.y = 0.0f;
+        if (dets[i].box.x + dets[i].box.width > img.cols) {
+            dets[i].box.width = std::max(0.0f, (float)img.cols - dets[i].box.x);
+        }
+        if (dets[i].box.y + dets[i].box.height > img.rows) {
+            dets[i].box.height = std::max(0.0f, (float)img.rows - dets[i].box.y);
+        }
         
         for (size_t j = 0; j < dets[i].landmarks.size(); j++) {
-            dets[i].landmarks[j].x = (dets[i].landmarks[j].x * 300.0f - transform_info.left) * transform_info.ratio;
-            dets[i].landmarks[j].y = (dets[i].landmarks[j].y * 300.0f - transform_info.top) * transform_info.ratio;
+            dets[i].landmarks[j].x = dets[i].landmarks[j].x * 300.0f * transform_info.ratio - transform_info.left;
+            dets[i].landmarks[j].y = dets[i].landmarks[j].y * 300.0f * transform_info.ratio - transform_info.top;
+
+            if (dets[i].landmarks[j].x < 0.0f) dets[i].landmarks[j].x = 0.0f;
+            if (dets[i].landmarks[j].y < 0.0f) dets[i].landmarks[j].y = 0.0f;
+            if (dets[i].landmarks[j].x > img.cols - 1) dets[i].landmarks[j].x = (float)(img.cols - 1);
+            if (dets[i].landmarks[j].y > img.rows - 1) dets[i].landmarks[j].y = (float)(img.rows - 1);
         }
     }
     
