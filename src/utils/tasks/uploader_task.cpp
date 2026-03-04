@@ -45,8 +45,12 @@ void UploaderTask::run() {
         // 假设返回 "code":0 成功，否则重试
         if (resp != "0" && item.retry < 3) {
             item.retry++;
-            log_error("upload failed, retrying (%d/3)", item.retry);
+            log_error("upload failed, retrying (%d/3), type=%s, id=%d, path=%s",
+                      item.retry, item.type.c_str(), item.cameraNumber, item.path.c_str());
             enqueue(item);
+        } else if (resp != "0") {
+            log_error("upload failed after max retries, dropped, type=%s, id=%d, path=%s",
+                      item.type.c_str(), item.cameraNumber, item.path.c_str());
         }
     }
 }

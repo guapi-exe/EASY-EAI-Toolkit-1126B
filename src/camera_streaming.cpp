@@ -46,6 +46,41 @@ typedef struct {
     guint64 dropped_frames;  // 丢帧计数
 } StreamContext;
 
+static void configure_appsrc_for_low_latency(GstElement *appsrc, gsize frame_size) {
+    g_object_set(G_OBJECT(appsrc),
+                 "is-live", TRUE,
+                 "do-timestamp", TRUE,
+                 "format", GST_FORMAT_TIME,
+                 "max-bytes", frame_size * 2,
+                 "block", FALSE,
+                 "emit-signals", FALSE,
+                 NULL);
+
+    GObjectClass *klass = G_OBJECT_GET_CLASS(appsrc);
+    if (g_object_class_find_property(klass, "max-buffers")) {
+        g_object_set(G_OBJECT(appsrc), "max-buffers", 2, NULL);
+    }
+    if (g_object_class_find_property(klass, "max-latency")) {
+        g_object_set(G_OBJECT(appsrc), "max-latency", (gint64)(GST_SECOND * 2), NULL);
+    }
+#ifdef GST_APP_LEAKY_TYPE_DOWNSTREAM
+    if (g_object_class_find_property(klass, "leaky-type")) {
+        g_object_set(G_OBJECT(appsrc), "leaky-type", GST_APP_LEAKY_TYPE_DOWNSTREAM, NULL);
+    }
+#endif
+}
+
+static void rtsp_media_unprepared(GstRTSPMedia *media, gpointer user_data) {
+    StreamContext *ctx = (StreamContext *)user_data;
+    (void)media;
+
+    if (ctx && ctx->appsrc) {
+        log_info("RTSP media unprepared, releasing appsrc reference");
+        gst_object_unref(ctx->appsrc);
+        ctx->appsrc = NULL;
+    }
+}
+
 void handleSignal(int) {
     running = false;
 }
@@ -165,6 +200,7 @@ bool create_rtmp_pipeline(StreamContext *ctx, const char *rtmp_url, int width, i
 // RTSP media 配置回调
 static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data) {
     StreamContext *ctx = (StreamContext *)user_data;
+    (void)factory;
     
     log_info("RTSP client connected, configuring media...");
     
@@ -176,6 +212,8 @@ static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *med
     
     // 查找 appsrc（使用 gst_bin_get_by_name）
     GstElement *appsrc = gst_bin_get_by_name(GST_BIN(element), "videosrc");
+
+    g_signal_connect(media, "unprepared", G_CALLBACK(rtsp_media_unprepared), ctx);
     
     if (appsrc) {
         log_info("Found appsrc, configuring...");
@@ -186,14 +224,7 @@ static void rtsp_media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *med
         // 计算单帧大小
         gsize frame_size = ctx->width * ctx->height * 3;  // BGR
         
-        g_object_set(G_OBJECT(appsrc),
-                     "is-live", TRUE,
-                     "do-timestamp", TRUE,
-                     "format", GST_FORMAT_TIME,
-                     "max-bytes", frame_size * 3,  // 最多缓冲 3 帧，防止堆积
-                     "block", FALSE,  // 不阻塞，缓冲区满时丢帧
-                     "emit-signals", FALSE,
-                     NULL);
+        configure_appsrc_for_low_latency(appsrc, frame_size);
         
         // 设置 caps
         GstCaps *caps = gst_caps_new_simple("video/x-raw",
@@ -276,10 +307,11 @@ bool create_rtsp_pipeline(StreamContext *ctx, const char *rtsp_url, int width, i
     // 设置 pipeline 描述（使用 appsrc）
     char launch_str[512];
     snprintf(launch_str, sizeof(launch_str),
-             "appsrc name=videosrc format=time ! "
+             "appsrc name=videosrc format=time is-live=true do-timestamp=true ! "
+             "queue max-size-buffers=2 leaky=downstream ! "
              "videoconvert ! "
-             "x264enc tune=zerolatency bitrate=2000 speed-preset=superfast key-int-max=%d ! "
-             "rtph264pay name=pay0 pt=96",
+             "x264enc tune=zerolatency bitrate=2000 speed-preset=superfast key-int-max=%d bframes=0 byte-stream=true ! "
+             "rtph264pay name=pay0 pt=96 config-interval=1",
              fps * 2);
     
     gst_rtsp_media_factory_set_launch(ctx->factory, launch_str);
@@ -335,8 +367,15 @@ bool push_frame(StreamContext *ctx, const Mat &frame) {
         scaled_frame_ptr = const_cast<Mat*>(&frame);
     }
     
-    // 创建 GstBuffer
     gsize size = scaled_frame_ptr->total() * scaled_frame_ptr->elemSize();
+
+    guint64 queued_bytes = gst_app_src_get_current_level_bytes(GST_APP_SRC(ctx->appsrc));
+    if (queued_bytes > size * 2) {
+        ctx->dropped_frames++;
+        return true;
+    }
+
+    // 创建 GstBuffer
     GstBuffer *buffer = gst_buffer_new_allocate(NULL, size, NULL);
     
     if (!buffer) {
@@ -589,7 +628,8 @@ int main(int argc, char** argv) {
         stream_ctx.camera_buffer = new vector<unsigned char>(IMAGE_SIZE);
     }
     if (!stream_ctx.frame_mat) {
-        stream_ctx.frame_mat = new Mat(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3);
+        stream_ctx.frame_mat = new Mat(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3,
+                                       stream_ctx.camera_buffer->data());
     }
     
     // 获取默认 GMainContext（用于 RTSP Server）
@@ -612,9 +652,6 @@ int main(int argc, char** argv) {
             continue;
         }
         
-        // 使用复用的 Mat，不复制数据，只是包装 buffer
-        stream_ctx.frame_mat->data = stream_ctx.camera_buffer->data();
-        
         if (stream_ctx.frame_mat->empty()) {
             log_error("帧数据为空");
             continue;
@@ -635,16 +672,6 @@ int main(int argc, char** argv) {
         }
         
         total_frames++;
-        
-        // 每 300 帧（约 10 秒）强制清理一次
-        if (total_frames % 300 == 0) {
-            // 强制触发垃圾回收
-            if (stream_ctx.scaled_mat && !stream_ctx.scaled_mat->empty()) {
-                stream_ctx.scaled_mat->release();
-            }
-            // 清理 GStreamer 缓存
-            g_main_context_wakeup(main_context);
-        }
         
         // 计算 FPS（每秒更新一次）
         auto now = std::chrono::steady_clock::now();
