@@ -59,7 +59,7 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
         return 0.0;
     }
     
-    int scale_factor = 2;
+    int scale_factor = CAPTURE_FOCUS_SCALE_FACTOR;
     
     int new_width = img.cols / scale_factor;
     int new_height = img.rows / scale_factor;
@@ -264,8 +264,7 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
-    constexpr double kMinClarityForCapture = 120.0;
-    constexpr float kMaxMotionRatioForCapture = 0.012f;
+    const float inv_diag_720p = 1.0f / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
 
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
     float scale_y = (float)IMAGE_HEIGHT / (float)CAMERA_HEIGHT; // 720/2160 = 0.333
@@ -342,9 +341,13 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         auto prev_it = lastTrackCenters.find(t.id);
         if (prev_it != lastTrackCenters.end()) {
             float pixel_motion = cv::norm(curr_center_720p - prev_it->second);
-            motion_ratio = pixel_motion / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
+            motion_ratio = pixel_motion * inv_diag_720p;
         }
         lastTrackCenters[t.id] = curr_center_720p;
+
+        if (t.hits < CAPTURE_MIN_TRACK_HITS) {
+            continue;
+        }
         
         // 将720p的bbox映射回4K坐标系，用于从原图截取高质量ROI
         int orig_x = static_cast<int>(bbox_720p.x / scale_x);
@@ -361,7 +364,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         
         Rect bbox_4k(orig_x, orig_y, orig_width, orig_height);
         
-        Mat person_roi = frame(bbox_4k).clone();
+        Mat person_roi = frame(bbox_4k);
         
         // 验证ROI尺寸，避免resize时出错
         if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
@@ -369,7 +372,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
         
         Mat person_roi_resized;
-        int target_width = min(640, person_roi.cols);
+        int target_width = min(CAPTURE_FACE_INPUT_MAX_WIDTH, person_roi.cols);
         int target_height = static_cast<int>(person_roi.rows * target_width / (float)person_roi.cols);
         
         // 确保目标尺寸有效
@@ -377,7 +380,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             continue;
         }
         
-        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_NEAREST);
+        cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
 
         if (t.bbox_history.size() >= 5) {
             float area_now = t.bbox_history.back();
@@ -385,9 +388,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
             
             // 判断是否正在接近摄像机
-            if (ratio > 0.1f) {
+            if (ratio > CAPTURE_APPROACH_RATIO_POS) {
                 t.is_approaching = true;
-            } else if (ratio < -0.1f) {
+            } else if (ratio < CAPTURE_APPROACH_RATIO_NEG) {
                 t.is_approaching = false;
             }
         }
@@ -395,105 +398,125 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (t.is_approaching && !t.has_captured) {
             float current_area_4k = bbox_4k.width * bbox_4k.height;
             float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
-            if (area_ratio > 0.05f) {
-                if (motion_ratio > kMaxMotionRatioForCapture) {
+            if (area_ratio > CAPTURE_MIN_AREA_RATIO) {
+                if (motion_ratio > CAPTURE_MAX_MOTION_RATIO) {
                     continue;
                 }
 
-                double current_clarity = computeFocusMeasure(person_roi_resized);
-                if (current_clarity > kMinClarityForCapture) {
-                    std::vector<det> face_result;
-                    int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
+                int& skip_counter = trackFaceDetectSkipCounters[t.id];
+                skip_counter = (skip_counter + 1) % CAPTURE_FACE_DETECT_INTERVAL;
+                if (skip_counter != 0) {
+                    continue;
+                }
 
-                    float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
-                    float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
-                    
-                    for (auto& face : face_result) {
-                        face.box.x *= face_scale_x;
-                        face.box.y *= face_scale_y;
-                        face.box.width *= face_scale_x;
-                        face.box.height *= face_scale_y;
-                        for (auto& lm : face.landmarks) {
-                            lm.x *= face_scale_x;
-                            lm.y *= face_scale_y;
-                        }
-                    }
-                    
-                    if (num_faces > 0) {
-                        Rect fbox(static_cast<int>(face_result[0].box.x), 
-                                 static_cast<int>(face_result[0].box.y),
-                                 static_cast<int>(face_result[0].box.width), 
-                                 static_cast<int>(face_result[0].box.height));
-                        int w_expand = static_cast<int>(fbox.width * 1.0 / 2.0);
-                        int h_expand = static_cast<int>(fbox.height * 1.0 / 2.0);
-                        fbox.x = std::max(0, fbox.x - w_expand);
-                        fbox.y = std::max(0, fbox.y - h_expand);
-                        fbox.width = std::min(person_roi.cols - fbox.x, fbox.width + 2 * w_expand);
-                        fbox.height = std::min(person_roi.rows - fbox.y, fbox.height + 2 * h_expand);
-                        if (fbox.width > 0 && fbox.height > 0) {
-                            Mat face_aligned = person_roi(fbox).clone();
-                            
-                            // 计算侧脸程度 (yaw)
-                            cv::Point2f left_eye = face_result[0].landmarks[0];
-                            cv::Point2f right_eye = face_result[0].landmarks[1];
-                            cv::Point2f nose = face_result[0].landmarks[2];
-                            float dx = right_eye.x - left_eye.x;
-                            float eye_center_x = (left_eye.x + right_eye.x) / 2.0f;
-                            float yaw = fabs((nose.x - eye_center_x) / dx);
-                            log_debug("Track ID=%d, clarity=%.2f, area_ratio=%.4f, yaw=%.4f", t.id, current_clarity, area_ratio, yaw);
-                            // 侧脸程度过大则丢弃 (yaw >= 0.7 表示极端侧脸或背面)
-                            if (yaw >= 0.8f) {
-                                continue;
-                            }
-                            
-                            // 动态计算质量权重因子（根据侧脸程度）
-                            float quality_weight, area_weight;
-                            if (yaw < 0.15f) {
-                                // 完全正脸 (0 ~ 0.15): 最高权重
-                                quality_weight = 0.8f;
-                                area_weight = 0.35f;
-                            } else if (yaw < 0.30f) {
-                                // 接近正脸 (0.15 ~ 0.30): 线性衰减
-                                float ratio = (yaw - 0.15f) / 0.15f;  // 0 -> 1
-                                quality_weight = 0.8f - ratio * 0.3f;  // 0.8 -> 0.5
-                                area_weight = 0.35f - ratio * 0.15f;   // 0.35 -> 0.2
-                            } else if (yaw < 0.50f) {
-                                // 侧脸 (0.30 ~ 0.50): 继续衰减
-                                float ratio = (yaw - 0.30f) / 0.20f;  // 0 -> 1
-                                quality_weight = 0.5f - ratio * 0.25f;  // 0.5 -> 0.25
-                                area_weight = 0.2f - ratio * 0.12f;     // 0.2 -> 0.08
-                            } else {
-                                // 大角度侧脸 (0.50 ~ 0.70): 最低权重
-                                float ratio = (yaw - 0.50f) / 0.20f;  // 0 -> 1
-                                quality_weight = 0.25f - ratio * 0.15f;  // 0.25 -> 0.1
-                                area_weight = 0.08f - ratio * 0.05f;     // 0.08 -> 0.03
-                            }
-                            
-                            // 计算面积得分
-                            float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
-                            float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-                            
-                            double current_score = current_clarity * quality_weight + area_score * 1000 * area_weight;
-                            
-                            for (int j = 0; j < (int)face_result[0].landmarks.size(); ++j) 
-                            {
-                                float landmark_x = face_result[0].landmarks[j].x * face_scale_x;
-                                float landmark_y = face_result[0].landmarks[j].y * face_scale_y;
-                                int draw_x = static_cast<int>(landmark_x - fbox.x);
-                                int draw_y = static_cast<int>(landmark_y - fbox.y);
-                                cv::circle(face_aligned, cv::Point(draw_x, draw_y), 2, cv::Scalar(225, 0, 225), 2, 8);
-                            }
-                            Track::FrameData frame_data;
-                            frame_data.score = current_score;
-                            frame_data.person_roi = person_roi.clone();
-                            frame_data.face_roi = face_aligned.clone();
-                            frame_data.has_face = true;
-                            frame_data.clarity = current_clarity;
-                            frame_data.area_ratio = area_ratio;
-                            add_frame_candidate(t.id, frame_data);
-                        }
+                std::vector<det> face_result;
+                int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
+                if (num_faces <= 0 || face_result.empty()) {
+                    continue;
+                }
+
+                int best_idx = 0;
+                for (int i = 1; i < num_faces; ++i) {
+                    if (face_result[i].score > face_result[best_idx].score) {
+                        best_idx = i;
                     }
                 }
+
+                float face_scale_x = (float)person_roi.cols / (float)person_roi_resized.cols;
+                float face_scale_y = (float)person_roi.rows / (float)person_roi_resized.rows;
+
+                det best_face = face_result[best_idx];
+                best_face.box.x *= face_scale_x;
+                best_face.box.y *= face_scale_y;
+                best_face.box.width *= face_scale_x;
+                best_face.box.height *= face_scale_y;
+                for (auto& lm : best_face.landmarks) {
+                    lm.x *= face_scale_x;
+                    lm.y *= face_scale_y;
+                }
+
+                double current_clarity = computeFocusMeasure(person_roi_resized);
+                if (current_clarity <= CAPTURE_MIN_CLARITY) {
+                    continue;
+                }
+
+                Rect base_fbox(static_cast<int>(best_face.box.x),
+                              static_cast<int>(best_face.box.y),
+                              static_cast<int>(best_face.box.width),
+                              static_cast<int>(best_face.box.height));
+                if (base_fbox.width <= 0 || base_fbox.height <= 0) {
+                    continue;
+                }
+
+                cv::Point2f left_eye = best_face.landmarks[0];
+                cv::Point2f right_eye = best_face.landmarks[1];
+                cv::Point2f nose = best_face.landmarks[2];
+                float dx = right_eye.x - left_eye.x;
+                if (std::fabs(dx) < 1e-5f) {
+                    continue;
+                }
+                float eye_center_x = (left_eye.x + right_eye.x) / 2.0f;
+                float yaw = std::fabs((nose.x - eye_center_x) / dx);
+                log_debug("Track ID=%d, clarity=%.2f, area_ratio=%.4f, yaw=%.4f", t.id, current_clarity, area_ratio, yaw);
+                if (yaw >= 0.8f) {
+                    continue;
+                }
+
+                int crop_w = std::max(1, static_cast<int>(base_fbox.width * CAPTURE_HEADSHOT_EXPAND_RATIO));
+                int crop_h = std::max(1, static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_EXPAND_RATIO));
+                int crop_cx = static_cast<int>(nose.x);
+                int crop_cy = static_cast<int>(nose.y - 0.10f * base_fbox.height);
+                int crop_x = crop_cx - crop_w / 2;
+                int crop_y = crop_cy - crop_h / 2;
+
+                crop_x = std::max(0, std::min(person_roi.cols - crop_w, crop_x));
+                crop_y = std::max(0, std::min(person_roi.rows - crop_h, crop_y));
+                Rect fbox(crop_x, crop_y,
+                          std::min(crop_w, person_roi.cols - crop_x),
+                          std::min(crop_h, person_roi.rows - crop_y));
+                if (fbox.width <= 0 || fbox.height <= 0) {
+                    continue;
+                }
+
+                Mat face_aligned = person_roi(fbox).clone();
+
+                float quality_weight, area_weight;
+                if (yaw < 0.15f) {
+                    quality_weight = 0.8f;
+                    area_weight = 0.35f;
+                } else if (yaw < 0.30f) {
+                    float ratio = (yaw - 0.15f) / 0.15f;
+                    quality_weight = 0.8f - ratio * 0.3f;
+                    area_weight = 0.35f - ratio * 0.15f;
+                } else if (yaw < 0.50f) {
+                    float ratio = (yaw - 0.30f) / 0.20f;
+                    quality_weight = 0.5f - ratio * 0.25f;
+                    area_weight = 0.2f - ratio * 0.12f;
+                } else {
+                    float ratio = (yaw - 0.50f) / 0.20f;
+                    quality_weight = 0.25f - ratio * 0.15f;
+                    area_weight = 0.08f - ratio * 0.05f;
+                }
+
+                float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
+                float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
+                double current_score = current_clarity * quality_weight + area_score * 1000 * area_weight;
+
+                for (int j = 0; j < (int)best_face.landmarks.size(); ++j)
+                {
+                    int draw_x = static_cast<int>(best_face.landmarks[j].x - fbox.x);
+                    int draw_y = static_cast<int>(best_face.landmarks[j].y - fbox.y);
+                    cv::circle(face_aligned, cv::Point(draw_x, draw_y), 2, cv::Scalar(225, 0, 225), 2, 8);
+                }
+
+                Track::FrameData frame_data;
+                frame_data.score = current_score;
+                frame_data.person_roi = person_roi.clone();
+                frame_data.face_roi = face_aligned.clone();
+                frame_data.has_face = true;
+                frame_data.clarity = current_clarity;
+                frame_data.area_ratio = area_ratio;
+                add_frame_candidate(t.id, frame_data);
             }
         }
     }
@@ -501,6 +524,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     for (auto it = lastTrackCenters.begin(); it != lastTrackCenters.end(); ) {
         if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
             it = lastTrackCenters.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = trackFaceDetectSkipCounters.begin(); it != trackFaceDetectSkipCounters.end(); ) {
+        if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
+            it = trackFaceDetectSkipCounters.erase(it);
         } else {
             ++it;
         }

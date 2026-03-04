@@ -60,4 +60,7 @@ private:
 
     // 运动稳定性：记录每个track上一次中心点（720p坐标）
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
+
+    // 人脸检测降频：每个track独立计数
+    std::unordered_map<int, int> trackFaceDetectSkipCounters;
 };
