@@ -42,15 +42,25 @@ void CameraTask::start() {
 }
 
 void CameraTask::stop() {
-    if (!running) return;
+    if (!running && !cameraOpened && !worker.joinable()) return;
     log_info("CameraTask: stopping...");
     running = false;
+
+    // 主动关闭摄像头，打断可能阻塞的取帧调用
+    if (cameraOpened.exchange(false)) {
+        mipicamera_exit(cameraIndex);
+    }
+
     if (worker.joinable()) worker.join();
     log_info("CameraTask: stopped");
 }
 
 void CameraTask::setUploadCallback(UploadCallback cb) {
     uploadCallback = cb;
+}
+
+void CameraTask::setPersonEventCallback(PersonEventCallback cb) {
+    personEventCallback = cb;
 }
 
 // -------------------- 图像清晰度计算 --------------------
@@ -203,6 +213,7 @@ void CameraTask::run() {
         face_detect_release(faceCtx);
         return;
     }
+    cameraOpened = true;
     mipicamera_set_format(cameraIndex, CAMERA_FORMAT);
     log_info("CameraTask: camera initialized successfully (format=%s)",
              CAMERA_FORMAT == RK_FORMAT_YCbCr_420_SP ? "NV12" :
@@ -222,6 +233,7 @@ void CameraTask::run() {
    */
 
     log_info("CameraTask: starting main processing loop...");
+    reportedPersonIds.clear();
     vector<unsigned char> buffer(IMAGE_SIZE);
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
@@ -239,13 +251,20 @@ void CameraTask::run() {
     }
 
     log_info("CameraTask: main loop exited, cleaning up...");
-    mipicamera_exit(cameraIndex);
+    if (cameraOpened.exchange(false)) {
+        mipicamera_exit(cameraIndex);
+    }
     person_detect_release(personCtx);
     face_detect_release(faceCtx);
     log_info("CameraTask: cleanup completed");
 }
 
 void CameraTask::captureSnapshot() {
+    if (!cameraOpened) {
+        log_warn("CameraTask: snapshot ignored, camera is not opened");
+        return;
+    }
+
     std::vector<unsigned char> buffer(IMAGE_SIZE);
     if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) == 0) {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
@@ -347,6 +366,13 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
 
         if (t.hits < CAPTURE_MIN_TRACK_HITS) {
             continue;
+        }
+
+        if (reportedPersonIds.find(t.id) == reportedPersonIds.end()) {
+            reportedPersonIds.insert(t.id);
+            if (personEventCallback) {
+                personEventCallback(t.id, "person_appeared");
+            }
         }
         
         // 将720p的bbox映射回4K坐标系，用于从原图截取高质量ROI
@@ -531,6 +557,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     for (auto it = trackFaceDetectSkipCounters.begin(); it != trackFaceDetectSkipCounters.end(); ) {
         if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
             it = trackFaceDetectSkipCounters.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = reportedPersonIds.begin(); it != reportedPersonIds.end(); ) {
+        if (activeTrackIds.find(*it) == activeTrackIds.end()) {
+            it = reportedPersonIds.erase(it);
         } else {
             ++it;
         }

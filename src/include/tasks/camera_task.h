@@ -12,6 +12,7 @@
 class CameraTask {
 public:
     using UploadCallback = std::function<void(const cv::Mat& img, int id, const std::string& type)>;
+    using PersonEventCallback = std::function<void(int personId, const std::string& eventType)>;
 
     CameraTask(const std::string& personModelPath,
                const std::string& faceModelPath,
@@ -22,6 +23,7 @@ public:
     void start();
     void stop();
     void setUploadCallback(UploadCallback cb);
+    void setPersonEventCallback(PersonEventCallback cb);
     void captureSnapshot();
     
     // 帧数统计相关函数
@@ -43,7 +45,9 @@ private:
 
     std::thread worker;
     std::atomic<bool> running;
+    std::atomic<bool> cameraOpened{false};
     UploadCallback uploadCallback;
+    PersonEventCallback personEventCallback;
 
     std::unordered_set<int> capturedPersonIds;
     std::unordered_set<int> capturedFaceIds;
@@ -63,4 +67,5 @@ private:
 
     // 人脸检测降频：每个track独立计数
     std::unordered_map<int, int> trackFaceDetectSkipCounters;
+    std::unordered_set<int> reportedPersonIds;
 };

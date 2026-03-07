@@ -6,6 +6,7 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <atomic>
+#include <functional>
 
 struct UploadItem {
     cv::Mat img;
@@ -17,6 +18,8 @@ struct UploadItem {
 
 class UploaderTask {
 public:
+    using UploadSuccessCallback = std::function<void(const UploadItem& item)>;
+
     UploaderTask(const std::string& eqCode, const std::string& url);
     ~UploaderTask();
 
@@ -24,6 +27,9 @@ public:
     void stop();
 
     void enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
+    void setServerUrl(const std::string& url);
+    void setEqCode(const std::string& code);
+    void setUploadSuccessCallback(UploadSuccessCallback cb);
 
 private:
     void enqueue(const UploadItem& item);
@@ -36,4 +42,5 @@ private:
     std::condition_variable cv;
     std::atomic<bool> running;
     std::thread worker;
+    UploadSuccessCallback uploadSuccessCallback;
 };

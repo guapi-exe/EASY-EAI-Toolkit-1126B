@@ -32,6 +32,21 @@ void UploaderTask::enqueue(const UploadItem& item) {
     cv.notify_one();
 }
 
+void UploaderTask::setServerUrl(const std::string& url) {
+    std::lock_guard<std::mutex> lock(mtx);
+    serverUrl = url;
+}
+
+void UploaderTask::setEqCode(const std::string& code) {
+    std::lock_guard<std::mutex> lock(mtx);
+    eqCode = code;
+}
+
+void UploaderTask::setUploadSuccessCallback(UploadSuccessCallback cb) {
+    std::lock_guard<std::mutex> lock(mtx);
+    uploadSuccessCallback = cb;
+}
+
 void UploaderTask::run() {
     while (running) {
         std::unique_lock<std::mutex> lock(mtx);
@@ -51,6 +66,15 @@ void UploaderTask::run() {
         } else if (resp != "0") {
             log_error("upload failed after max retries, dropped, type=%s, id=%d, path=%s",
                       item.type.c_str(), item.cameraNumber, item.path.c_str());
+        } else {
+            UploadSuccessCallback cb;
+            {
+                std::lock_guard<std::mutex> cbLock(mtx);
+                cb = uploadSuccessCallback;
+            }
+            if (cb) {
+                cb(item);
+            }
         }
     }
 }
