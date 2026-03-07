@@ -239,14 +239,27 @@ void TcpClient::handleIncomingBuffer(const std::string& incoming) {
 }
 
 void TcpClient::handleMessage(const std::string& line) {
+    log_info("TcpClient: recv %s", line.c_str());
+
     try {
         json j = json::parse(line);
         std::string type = j.value("type", "");
 
         if (type == "config_update") {
+            int oldHeartbeat = config->heartbeatIntervalSec;
+            int oldReconnect = config->reconnectIntervalSec;
+
             if (config->applyServerConfig(line)) {
                 config->save(configPath);
-                log_info("TcpClient: applied server config update");
+                log_info("TcpClient: applied server config update and saved to %s", configPath.c_str());
+
+                if (oldHeartbeat != config->heartbeatIntervalSec || oldReconnect != config->reconnectIntervalSec) {
+                    log_info("TcpClient: intervals updated heartbeat=%d reconnect=%d",
+                             config->heartbeatIntervalSec,
+                             config->reconnectIntervalSec);
+                }
+            } else {
+                log_warn("TcpClient: config_update parse/apply failed, ignore");
             }
 
             CommandCallback cb;
