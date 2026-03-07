@@ -33,7 +33,7 @@ int main() {
     std::atomic<bool> sleepMode(false);
 
     uploader.setUploadSuccessCallback([&](const UploadItem& item) {
-        if (item.type == "face" || item.type == "all") {
+        if (item.type == "face" || item.type == "all" || item.type == "manual") {
             tcpClient.sendCaptureComplete(item.cameraNumber, item.type);
         }
     });
@@ -46,7 +46,10 @@ int main() {
 
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type) {
         (void)id;
-        uploader.enqueue(img, config.cameraNumber, type, config.uploadImagePath);
+        const std::string& targetPath = (type == "manual")
+            ? config.uploadManualImagePath
+            : config.uploadImagePath;
+        uploader.enqueue(img, config.cameraNumber, type, targetPath);
     });
 
     tcpClient.setCommandCallback([&](const std::string& cmdType, const std::string& payload) {

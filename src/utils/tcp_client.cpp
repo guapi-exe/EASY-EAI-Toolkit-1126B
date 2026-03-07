@@ -6,6 +6,8 @@ extern "C" {
 }
 
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -22,6 +24,7 @@ using nlohmann::json;
 
 namespace {
 constexpr size_t kMaxPendingMessages = 1000;
+constexpr int kConnectTimeoutSec = 2;
 }
 
 TcpClient::TcpClient(DeviceConfig* cfg, const std::string& cfgPath)
@@ -82,8 +85,16 @@ void TcpClient::queueJsonLine(const std::string& jsonLine) {
 void TcpClient::tryConnect() {
     if (connected) return;
 
+    static unsigned long long attemptCount = 0;
+    attemptCount++;
+    log_info("TcpClient: connect attempt #%llu to %s:%d",
+             attemptCount,
+             config->tcpServerIp.c_str(),
+             config->tcpPort);
+
     int localSock = socket(AF_INET, SOCK_STREAM, 0);
     if (localSock < 0) {
+        log_warn("TcpClient: socket() failed: %s", strerror(errno));
         return;
     }
 
@@ -92,11 +103,53 @@ void TcpClient::tryConnect() {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config->tcpPort);
     if (inet_pton(AF_INET, config->tcpServerIp.c_str(), &addr.sin_addr) <= 0) {
+        log_warn("TcpClient: invalid server ip: %s", config->tcpServerIp.c_str());
         close(localSock);
         return;
     }
 
-    if (connect(localSock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    int flags = fcntl(localSock, F_GETFL, 0);
+    if (flags < 0 || fcntl(localSock, F_SETFL, flags | O_NONBLOCK) < 0) {
+        log_warn("TcpClient: failed to set non-blocking mode: %s", strerror(errno));
+        close(localSock);
+        return;
+    }
+
+    int ret = connect(localSock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    if (ret < 0 && errno != EINPROGRESS) {
+        log_warn("TcpClient: connect() failed immediately: %s", strerror(errno));
+        close(localSock);
+        return;
+    }
+
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(localSock, &wfds);
+    timeval tv;
+    tv.tv_sec = kConnectTimeoutSec;
+    tv.tv_usec = 0;
+
+    ret = select(localSock + 1, nullptr, &wfds, nullptr, &tv);
+    if (ret <= 0) {
+        if (ret == 0) {
+            log_warn("TcpClient: connect timeout after %d sec", kConnectTimeoutSec);
+        } else {
+            log_warn("TcpClient: select() during connect failed: %s", strerror(errno));
+        }
+        close(localSock);
+        return;
+    }
+
+    int soError = 0;
+    socklen_t len = sizeof(soError);
+    if (getsockopt(localSock, SOL_SOCKET, SO_ERROR, &soError, &len) < 0 || soError != 0) {
+        log_warn("TcpClient: connect failed: %s", strerror(soError == 0 ? errno : soError));
+        close(localSock);
+        return;
+    }
+
+    if (fcntl(localSock, F_SETFL, flags) < 0) {
+        log_warn("TcpClient: failed to restore blocking mode: %s", strerror(errno));
         close(localSock);
         return;
     }
@@ -153,6 +206,10 @@ void TcpClient::flushSendQueue() {
 
         ssize_t sent = send(fdCopy, msg.data(), msg.size(), MSG_NOSIGNAL);
         if (sent < 0 || (size_t)sent != msg.size()) {
+            log_warn("TcpClient: send failed, disconnect and retry later (errno=%d, sent=%zd, size=%zu)",
+                     errno,
+                     sent,
+                     msg.size());
             connected = false;
             closeSocket();
             break;
@@ -250,6 +307,7 @@ void TcpClient::workerLoop() {
 
         int sel = select(fdCopy + 1, &readfds, nullptr, nullptr, &tv);
         if (sel < 0) {
+            log_warn("TcpClient: select read failed, reconnecting: %s", strerror(errno));
             closeSocket();
             continue;
         }
@@ -261,6 +319,11 @@ void TcpClient::workerLoop() {
             char buf[1024];
             ssize_t n = recv(fdCopy, buf, sizeof(buf), 0);
             if (n <= 0) {
+                if (n == 0) {
+                    log_warn("TcpClient: server closed connection, reconnecting...");
+                } else {
+                    log_warn("TcpClient: recv failed, reconnecting: %s", strerror(errno));
+                }
                 closeSocket();
                 continue;
             }

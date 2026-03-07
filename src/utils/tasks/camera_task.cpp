@@ -270,7 +270,7 @@ void CameraTask::captureSnapshot() {
         cv::Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (!frame.empty()) {
             if (uploadCallback) {
-                uploadCallback(frame.clone(), 0, "all");
+                uploadCallback(frame.clone(), 0, "manual");
                 log_info("CameraTask: snapshot uploaded");
             }
         } else {

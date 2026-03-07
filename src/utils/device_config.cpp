@@ -16,7 +16,8 @@ static json buildDefaultJson(const DeviceConfig& cfg) {
     };
     j["upload"] = {
         {"server", cfg.uploadServer},
-        {"image_path", cfg.uploadImagePath}
+        {"image_path", cfg.uploadImagePath},
+        {"manual_image_path", cfg.uploadManualImagePath}
     };
     j["tcp"] = {
         {"server_ip", cfg.tcpServerIp},
@@ -57,6 +58,9 @@ static void loadFromJson(DeviceConfig* cfg, const json& j) {
         }
         if (j["upload"].contains("image_path")) {
             cfg->uploadImagePath = j["upload"]["image_path"].get<std::string>();
+        }
+        if (j["upload"].contains("manual_image_path")) {
+            cfg->uploadManualImagePath = j["upload"]["manual_image_path"].get<std::string>();
         }
     }
 

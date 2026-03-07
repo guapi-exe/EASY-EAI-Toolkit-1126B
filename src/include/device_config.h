@@ -9,6 +9,7 @@ struct DeviceConfig {
     int cameraNumber = DEFAULT_CAMERA_NUMBER;
     std::string uploadServer = "http://101.200.56.225:11100";
     std::string uploadImagePath = "/receive/image/auto";
+    std::string uploadManualImagePath = "/receive/image/manual";
     std::string tcpServerIp = "192.168.1.1";
     int tcpPort = 19000;
     int heartbeatIntervalSec = 10;
