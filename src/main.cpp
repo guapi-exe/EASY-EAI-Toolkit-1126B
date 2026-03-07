@@ -3,9 +3,14 @@
 #include "uploader_task.h"
 #include "device_config.h"
 #include "tcp_client.h"
+#include <atomic>
 #include <csignal> 
 #include <chrono>
 #include <thread>
+
+extern "C" {
+#include "log.h"
+}
 
 std::atomic<bool> running(true);
 
