@@ -3,6 +3,28 @@ extern "C" {
 #include "log.h"
 }
 #include <curl/curl.h>
+#include <random>
+
+namespace {
+std::string generate_unique_code_12() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    static const char kChars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::uniform_int_distribution<int> dist(0, (int)sizeof(kChars) - 2);
+
+    std::string code;
+    code.reserve(12);
+    for (int i = 0; i < 12; ++i) {
+        code.push_back(kChars[dist(rng)]);
+    }
+    return code;
+}
+
+void add_form_field(curl_mime* form, const char* name, const std::string& value) {
+    curl_mimepart* field = curl_mime_addpart(form);
+    curl_mime_name(field, name);
+    curl_mime_data(field, value.c_str(), CURL_ZERO_TERMINATED);
+}
+}
 
 UploaderTask::UploaderTask(const std::string& eqCode, const std::string& url) : eqCode(eqCode), serverUrl(url), running(false) {}
 
@@ -96,15 +118,24 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const
     curl_mime_filename(field, "image.jpg");
     curl_mime_type(field, "image/jpeg");
 
-    // time
-    field = curl_mime_addpart(form);
-    curl_mime_name(field, "time");
-    curl_mime_data(field, std::to_string(time(nullptr)).c_str(), CURL_ZERO_TERMINATED);
+    // time + camerNumber
+    add_form_field(form, "time", std::to_string(time(nullptr)));
+    add_form_field(form, "camerNumber", std::to_string(cameraNumber));
 
-    // camerNumber
-    field = curl_mime_addpart(form);
-    curl_mime_name(field, "camerNumber");
-    curl_mime_data(field, std::to_string(cameraNumber).c_str(), CURL_ZERO_TERMINATED);
+    // /receive/image/auto/minio 需要附加字段
+    if (path.find("/receive/image/auto/minio") != std::string::npos) {
+        std::string imageType = "1";
+        std::string isHaveFace = "0";
+
+        if (type == "face") {
+            imageType = "2";
+            isHaveFace = "1";
+        }
+
+        add_form_field(form, "imageType", imageType);
+        add_form_field(form, "isHaveFace", isHaveFace);
+        add_form_field(form, "uniqueCode", generate_unique_code_12());
+    }
 
     // eq-code header
     struct curl_slist *headers = nullptr;
