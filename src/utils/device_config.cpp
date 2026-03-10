@@ -121,8 +121,18 @@ bool DeviceConfig::applyServerConfig(const std::string& jsonPayload) {
     try {
         json j = json::parse(jsonPayload);
         if (j.contains("config")) {
-            loadFromJson(this, j["config"]);
+            json cfg = j["config"];
+            if (cfg.contains("upload") && cfg["upload"].is_object()) {
+                // 上传路径由本地运行模式控制(debug/normal)，不接受服务端下发覆盖。
+                cfg["upload"].erase("image_path");
+                cfg["upload"].erase("manual_image_path");
+            }
+            loadFromJson(this, cfg);
             return true;
+        }
+        if (j.contains("upload") && j["upload"].is_object()) {
+            j["upload"].erase("image_path");
+            j["upload"].erase("manual_image_path");
         }
         loadFromJson(this, j);
         return true;
