@@ -20,12 +20,36 @@ void handleSignal(int) {
     running = false;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    bool debugMode = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "debug" || arg == "--debug") {
+            debugMode = true;
+        }
+    }
+
     const std::string configPath = "device_config.json";
     DeviceConfig config;
     if (!config.loadOrCreate(configPath)) {
         log_error("Failed to load or create config file: %s", configPath.c_str());
         return -1;
+    }
+
+    if (debugMode) {
+        // 调试模式下回退到原自动上传接口，便于联调旧服务。
+        if (config.uploadImagePath != "/receive/image/auto") {
+            config.uploadImagePath = "/receive/image/auto";
+            config.save(configPath);
+        }
+        log_info("Debug mode enabled: upload path switched to %s", config.uploadImagePath.c_str());
+    } else {
+        // 非调试模式默认使用 minio 上传接口。
+        if (config.uploadImagePath != "/receive/image/auto/minio") {
+            config.uploadImagePath = "/receive/image/auto/minio";
+            config.save(configPath);
+            log_info("Normal mode: upload path switched to %s", config.uploadImagePath.c_str());
+        }
     }
 
     UploaderTask uploader(config.deviceCode, config.uploadServer);
@@ -125,7 +149,7 @@ int main() {
 
     std::signal(SIGINT, handleSignal);
 
-    log_info("System started. Press Ctrl+C to stop.");
+    log_info("System started. Press Ctrl+C to stop. mode=%s", debugMode ? "debug" : "normal");
 
     while (running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
