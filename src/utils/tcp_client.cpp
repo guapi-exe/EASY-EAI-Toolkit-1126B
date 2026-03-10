@@ -57,6 +57,7 @@ void TcpClient::sendPersonAppeared(int personId) {
     json j = {
         {"type", "event"},
         {"event", "person_appeared"},
+        {"camera_number", config->cameraNumber},
         {"person_id", personId},
         {"ts", (long long)time(nullptr)}
     };
@@ -67,6 +68,7 @@ void TcpClient::sendCaptureComplete(int personId, const std::string& imageType) 
     json j = {
         {"type", "event"},
         {"event", "capture_complete"},
+        {"camera_number", config->cameraNumber},
         {"person_id", personId},
         {"image_type", imageType},
         {"ts", (long long)time(nullptr)}
@@ -164,6 +166,7 @@ void TcpClient::tryConnect() {
     json reg = {
         {"type", "register"},
         {"device_code", config->deviceCode},
+        {"camera_number", config->cameraNumber},
         {"ts", (long long)time(nullptr)}
     };
     queueJsonLine(reg.dump());
@@ -358,6 +361,7 @@ std::string TcpClient::buildHeartbeatJson() const {
     json j = {
         {"type", "heartbeat"},
         {"device_code", config->deviceCode},
+        {"camera_number", config->cameraNumber},
         {"cpu_temp_c", readCpuTemperatureC()},
         {"cpu_usage", readCpuUsagePercent()},
         {"mem_usage", readMemoryUsagePercent()},
