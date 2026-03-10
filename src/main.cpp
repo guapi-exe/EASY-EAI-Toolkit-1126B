@@ -6,7 +6,9 @@
 #include <atomic>
 #include <csignal> 
 #include <chrono>
+#include <random>
 #include <thread>
+#include <unordered_map>
 
 extern "C" {
 #include "log.h"
@@ -31,6 +33,19 @@ int main() {
     TcpClient tcpClient(&config, configPath);
 
     std::atomic<bool> sleepMode(false);
+    std::unordered_map<int, std::string> groupedUniqueCode;
+
+    auto generateUniqueCode12 = []() {
+        static thread_local std::mt19937 rng(std::random_device{}());
+        static const char kChars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        std::uniform_int_distribution<int> dist(0, (int)sizeof(kChars) - 2);
+        std::string code;
+        code.reserve(12);
+        for (int i = 0; i < 12; ++i) {
+            code.push_back(kChars[dist(rng)]);
+        }
+        return code;
+    };
 
     uploader.setUploadSuccessCallback([&](const UploadItem& item) {
         if (item.type == "face" || item.type == "all" || item.type == "manual") {
@@ -45,11 +60,27 @@ int main() {
     });
 
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type) {
-        (void)id;
         const std::string& targetPath = (type == "manual")
             ? config.uploadManualImagePath
             : config.uploadImagePath;
-        uploader.enqueue(img, config.cameraNumber, type, targetPath);
+
+        std::string uniqueCode;
+        if ((type == "person" || type == "face") && id > 0) {
+            auto it = groupedUniqueCode.find(id);
+            if (it == groupedUniqueCode.end()) {
+                uniqueCode = generateUniqueCode12();
+                groupedUniqueCode[id] = uniqueCode;
+            } else {
+                uniqueCode = it->second;
+            }
+
+            // 当前逻辑下同组通常是先person再face，face入队后可清理映射。
+            if (type == "face") {
+                groupedUniqueCode.erase(id);
+            }
+        }
+
+        uploader.enqueue(img, config.cameraNumber, type, targetPath, uniqueCode);
     });
 
     tcpClient.setCommandCallback([&](const std::string& cmdType, const std::string& payload) {

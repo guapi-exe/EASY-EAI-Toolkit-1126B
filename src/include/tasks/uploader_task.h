@@ -13,6 +13,7 @@ struct UploadItem {
     int cameraNumber;
     std::string type;
     std::string path;
+    std::string uniqueCode;
     int retry = 0;
 };
 
@@ -26,7 +27,11 @@ public:
     void start();
     void stop();
 
-    void enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
+    void enqueue(const cv::Mat& img,
+                 int cameraNumber,
+                 const std::string& type,
+                 const std::string& path = "",
+                 const std::string& uniqueCode = "");
     void setServerUrl(const std::string& url);
     void setEqCode(const std::string& code);
     void setUploadSuccessCallback(UploadSuccessCallback cb);
@@ -34,7 +39,11 @@ public:
 private:
     void enqueue(const UploadItem& item);
     void run();
-    std::string uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path = "");
+    std::string uploadHttp(const cv::Mat& img,
+                           int cameraNumber,
+                           const std::string& type,
+                           const std::string& path = "",
+                           const std::string& uniqueCode = "");
     std::string eqCode;
     std::string serverUrl;
     std::queue<UploadItem> queue;

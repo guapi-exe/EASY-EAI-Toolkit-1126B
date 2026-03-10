@@ -42,9 +42,13 @@ void UploaderTask::stop() {
     if (worker.joinable()) worker.join();
 }
 
-void UploaderTask::enqueue(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path) {
+void UploaderTask::enqueue(const cv::Mat& img,
+                          int cameraNumber,
+                          const std::string& type,
+                          const std::string& path,
+                          const std::string& uniqueCode) {
     std::lock_guard<std::mutex> lock(mtx);
-    queue.push({img.clone(), cameraNumber, type, path, 0});
+    queue.push({img.clone(), cameraNumber, type, path, uniqueCode, 0});
     cv.notify_one();
 }
 
@@ -78,7 +82,7 @@ void UploaderTask::run() {
         UploadItem item = queue.front(); queue.pop();
         lock.unlock();
 
-        std::string resp = uploadHttp(item.img, item.cameraNumber, item.type, item.path);
+        std::string resp = uploadHttp(item.img, item.cameraNumber, item.type, item.path, item.uniqueCode);
         // 假设返回 "code":0 成功，否则重试
         if (resp != "0" && item.retry < 3) {
             item.retry++;
@@ -101,7 +105,11 @@ void UploaderTask::run() {
     }
 }
 
-std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const std::string& type, const std::string& path) {
+std::string UploaderTask::uploadHttp(const cv::Mat& img,
+                                     int cameraNumber,
+                                     const std::string& type,
+                                     const std::string& path,
+                                     const std::string& uniqueCode) {
     // 使用 libcurl POST 上传 form-data
     CURL *curl = curl_easy_init();
     if (!curl) return "1";
@@ -134,7 +142,8 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img, int cameraNumber, const
 
         add_form_field(form, "imageType", imageType);
         add_form_field(form, "isHaveFace", isHaveFace);
-        add_form_field(form, "uniqueCode", generate_unique_code_12());
+        std::string code = uniqueCode.empty() ? generate_unique_code_12() : uniqueCode;
+        add_form_field(form, "uniqueCode", code);
     }
 
     // eq-code header
