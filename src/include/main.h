@@ -11,7 +11,7 @@
 #define CAMERA_FORMAT   RK_FORMAT_BGR_888  
 #define IMGRATIO        3
 #define IMAGE_SIZE      (CAMERA_WIDTH*CAMERA_HEIGHT*IMGRATIO)
-#define MAX_MISSED      30
+#define MAX_MISSED      45
 
 #define PERSON_MODEL_PATH   "person_detect.model"
 #define FACE_MODEL_PATH     "face_detect.model"
@@ -25,7 +25,7 @@
 // 抓拍与性能调优参数
 #define CAPTURE_MIN_CLARITY              80.0
 #define CAPTURE_MAX_MOTION_RATIO         0.020f
-#define CAPTURE_PERSON_DETECT_INTERVAL   2
+#define CAPTURE_PERSON_DETECT_INTERVAL   3
 #define CAPTURE_FACE_DETECT_INTERVAL    2
 #define CAPTURE_FACE_INPUT_MAX_WIDTH    512
 #define CAPTURE_MIN_FACE_SCORE          0.55f

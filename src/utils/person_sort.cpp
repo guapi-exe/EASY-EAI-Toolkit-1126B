@@ -14,6 +14,14 @@ extern "C" {
 static std::vector<Track> tracks;
 static int next_id = 1;
 
+struct PendingTrack {
+    cv::Rect2f bbox;
+    cv::Mat hist;
+    float prop;
+    int hits;
+    int ttl;
+};
+
 struct LostTrack {
     int id;
     cv::Rect2f bbox;
@@ -22,11 +30,15 @@ struct LostTrack {
 };
 
 static std::vector<LostTrack> lost_tracks;
+static std::vector<PendingTrack> pending_tracks;
 static constexpr int LOST_TRACK_TTL = MAX_MISSED + 15;
+static constexpr int PENDING_TRACK_TTL = 4;
+static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
 
 void sort_init() { 
     tracks.clear(); 
     lost_tracks.clear();
+    pending_tracks.clear();
     next_id = 1; 
 }
 
@@ -82,6 +94,17 @@ static float center_distance_norm(const cv::Rect2f& a, const cv::Rect2f& b) {
     float dy = ay - by;
     float diag = std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
     return std::sqrt(dx * dx + dy * dy) / (diag + 1e-6f);
+}
+
+static void age_pending_tracks() {
+    for (auto& pt : pending_tracks) {
+        pt.ttl--;
+    }
+    pending_tracks.erase(
+        std::remove_if(pending_tracks.begin(), pending_tracks.end(), [](const PendingTrack& pt) {
+            return pt.ttl <= 0;
+        }),
+        pending_tracks.end());
 }
 
 static void age_lost_tracks() {
@@ -149,6 +172,64 @@ static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
         lost_tracks.erase(lost_tracks.begin() + best_idx);
         log_debug("Reuse lost track id: %d (score=%.3f)", reused_id, best_score);
         return reused_id;
+    }
+
+    return -1;
+}
+
+static bool should_suppress_new_track(const Detection& det) {
+    cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
+
+    for (const auto& t : tracks) {
+        float iou_score = iou(t.bbox, det_rect);
+        float center_dist = center_distance_norm(t.bbox, det_rect);
+        if (iou_score > 0.45f || center_dist < 0.03f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int update_pending_track(const Detection& det, const cv::Mat& det_hist) {
+    cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
+
+    int best_idx = -1;
+    float best_score = -1.0f;
+    for (int i = 0; i < static_cast<int>(pending_tracks.size()); ++i) {
+        float iou_score = iou(pending_tracks[i].bbox, det_rect);
+        float hist_score = hist_distance(pending_tracks[i].hist, det_hist);
+        float score = iou_score * 0.65f + (1.0f - hist_score) * 0.35f;
+        if (iou_score > 0.20f && hist_score < 0.55f && score > best_score) {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+
+    if (best_idx == -1) {
+        PendingTrack pt;
+        pt.bbox = det_rect;
+        pt.hist = det_hist.clone();
+        pt.prop = det.prop;
+        pt.hits = 1;
+        pt.ttl = PENDING_TRACK_TTL;
+        pending_tracks.push_back(std::move(pt));
+        return -1;
+    }
+
+    auto& pt = pending_tracks[best_idx];
+    pt.bbox = det_rect;
+    pt.hist = det_hist.clone();
+    pt.prop = det.prop;
+    pt.hits++;
+    pt.ttl = PENDING_TRACK_TTL;
+
+    if (pt.hits >= PENDING_TRACK_HITS_REQUIRED) {
+        int reused_id = reuse_lost_track_id(det, det_hist);
+        int assigned_id = (reused_id > 0) ? reused_id : next_id++;
+
+        tracks.push_back(create_track(det, assigned_id));
+        pending_tracks.erase(pending_tracks.begin() + best_idx);
+        return assigned_id;
     }
 
     return -1;
@@ -308,6 +389,7 @@ static Track create_track(const Detection& det, int id) {
 
 std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     age_lost_tracks();
+    age_pending_tracks();
 
     // 预测所有track
     for (auto& t : tracks) predict_track(t);
@@ -316,16 +398,16 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     int M = dets.size();
     
     if (N == 0) {
-        // 没有现有track，直接创建新的
+        // 没有现有track时也不立即建轨，先进入pending确认
         std::vector<cv::Mat> det_hists(M);
         for (int j = 0; j < M; j++) {
             det_hists[j] = calc_hist(dets[j].roi);
         }
         for (int j = 0; j < M; j++) {
-            int reused_id = reuse_lost_track_id(dets[j], det_hists[j]);
-            int assigned_id = (reused_id > 0) ? reused_id : next_id++;
-            tracks.push_back(create_track(dets[j], assigned_id));
-            log_debug("New person appeared: ID=%d", assigned_id);
+            int assigned_id = update_pending_track(dets[j], det_hists[j]);
+            if (assigned_id > 0) {
+                log_debug("New person appeared: ID=%d", assigned_id);
+            }
         }
         return tracks;
     }
@@ -439,10 +521,14 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     // 创建新tracks
     for (int j=0; j<M; j++) {
         if(!det_assigned[j]){
-            int reused_id = reuse_lost_track_id(dets[j], det_hists[j]);
-            int assigned_id = (reused_id > 0) ? reused_id : next_id++;
-            tracks.push_back(create_track(dets[j], assigned_id));
-            log_debug("New person appeared: ID=%d", assigned_id);
+            if (should_suppress_new_track(dets[j])) {
+                continue;
+            }
+
+            int assigned_id = update_pending_track(dets[j], det_hists[j]);
+            if (assigned_id > 0) {
+                log_debug("New person appeared: ID=%d", assigned_id);
+            }
         }
     }
     
