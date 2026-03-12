@@ -12,6 +12,57 @@ extern "C" {
 using namespace cv;
 using namespace std;
 
+static float rect_iou(const cv::Rect& a, const cv::Rect& b) {
+    int xx1 = std::max(a.x, b.x);
+    int yy1 = std::max(a.y, b.y);
+    int xx2 = std::min(a.x + a.width, b.x + b.width);
+    int yy2 = std::min(a.y + a.height, b.y + b.height);
+    int w = std::max(0, xx2 - xx1);
+    int h = std::max(0, yy2 - yy1);
+    float inter = static_cast<float>(w * h);
+    float uni = static_cast<float>(a.area() + b.area()) - inter;
+    return inter / (uni + 1e-6f);
+}
+
+static void nmsDetections(std::vector<Detection>& dets, float iouThreshold) {
+    if (dets.size() <= 1) {
+        return;
+    }
+
+    std::sort(dets.begin(), dets.end(), [](const Detection& a, const Detection& b) {
+        return a.prop > b.prop;
+    });
+
+    std::vector<bool> suppressed(dets.size(), false);
+    std::vector<Detection> kept;
+    kept.reserve(dets.size());
+
+    for (size_t i = 0; i < dets.size(); ++i) {
+        if (suppressed[i]) {
+            continue;
+        }
+
+        kept.push_back(dets[i]);
+        cv::Rect a(static_cast<int>(dets[i].x1), static_cast<int>(dets[i].y1),
+                   static_cast<int>(dets[i].x2 - dets[i].x1),
+                   static_cast<int>(dets[i].y2 - dets[i].y1));
+
+        for (size_t j = i + 1; j < dets.size(); ++j) {
+            if (suppressed[j]) {
+                continue;
+            }
+            cv::Rect b(static_cast<int>(dets[j].x1), static_cast<int>(dets[j].y1),
+                       static_cast<int>(dets[j].x2 - dets[j].x1),
+                       static_cast<int>(dets[j].y2 - dets[j].y1));
+            if (rect_iou(a, b) > iouThreshold) {
+                suppressed[j] = true;
+            }
+        }
+    }
+
+    dets.swap(kept);
+}
+
 CameraTask::CameraTask(const string& personModel, const string& faceModel, int index)
     : personModelPath(personModel), faceModelPath(faceModel), cameraIndex(index), running(false) {
     startTime = std::chrono::steady_clock::now();
@@ -132,7 +183,7 @@ void CameraTask::updateFPS() {
         
         auto totalElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startTime);
         if (totalElapsed.count() % 10 == 0 && totalElapsed.count() > 0) {
-            log_info("帧数统计: 总帧数=%ld, 当前FPS=%.2f, 运行时间=%lds", currentFrames, currentFPS.load(), totalElapsed.count());
+            log_info("Algo FPS: total_processed=%ld, fps=%.2f, uptime=%lds", currentFrames, currentFPS.load(), totalElapsed.count());
         }
     }
 }
@@ -289,6 +340,8 @@ void CameraTask::run() {
 
 void CameraTask::captureLoop() {
     std::vector<unsigned char> buffer(IMAGE_SIZE);
+    auto captureFpsWindowStart = std::chrono::steady_clock::now();
+    long captureFramesInWindow = 0;
 
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) {
@@ -309,6 +362,16 @@ void CameraTask::captureLoop() {
             latestFrameSeq++;
         }
         frameCv.notify_one();
+
+        captureFramesInWindow++;
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsWindowStart).count();
+        if (elapsed >= 5) {
+            double captureFps = static_cast<double>(captureFramesInWindow) / static_cast<double>(elapsed);
+            log_info("Capture FPS: fps=%.2f", captureFps);
+            captureFpsWindowStart = now;
+            captureFramesInWindow = 0;
+        }
     }
 }
 
@@ -336,6 +399,9 @@ void CameraTask::captureSnapshot() {
 
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_context faceCtx) {
+    static int personDetectCounter = 0;
+    static std::vector<Track> cachedTracks;
+
     const float inv_diag_720p = 1.0f / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
 
     float scale_x = (float)IMAGE_WIDTH / (float)CAMERA_WIDTH;   // 1280/3840 = 0.333
@@ -375,30 +441,39 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     Mat resized_frame;
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
 
-    detect_result_group_t detect_result_group;
-    person_detect_run(personCtx, resized_frame, &detect_result_group);
+    bool runPersonDetect = (personDetectCounter % CAPTURE_PERSON_DETECT_INTERVAL == 0) || cachedTracks.empty();
+    personDetectCounter++;
 
-    vector<Detection> dets;
-    for (int i=0; i<detect_result_group.count; i++) {
-        detect_result_t& d = detect_result_group.results[i];
-        if (d.prop < 0.7) continue;
-        
-        Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
-                      min(IMAGE_WIDTH-1, d.box.right) - max(0, d.box.left),
-                      min(IMAGE_HEIGHT-1, d.box.bottom) - max(0, d.box.top));
-        if (roi_720p.width <=0 || roi_720p.height <=0) continue;
-        
-        Detection det; 
-        det.roi = resized_frame(roi_720p); 
-        det.x1 = roi_720p.x; 
-        det.y1 = roi_720p.y; 
-        det.x2 = roi_720p.x + roi_720p.width; 
-        det.y2 = roi_720p.y + roi_720p.height; 
-        det.prop = d.prop;
-        dets.push_back(det);
+    if (runPersonDetect) {
+        detect_result_group_t detect_result_group;
+        person_detect_run(personCtx, resized_frame, &detect_result_group);
+
+        vector<Detection> dets;
+        dets.reserve(detect_result_group.count);
+        for (int i = 0; i < detect_result_group.count; i++) {
+            detect_result_t& d = detect_result_group.results[i];
+            if (d.prop < 0.7f) continue;
+
+            Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
+                          min(IMAGE_WIDTH - 1, d.box.right) - max(0, d.box.left),
+                          min(IMAGE_HEIGHT - 1, d.box.bottom) - max(0, d.box.top));
+            if (roi_720p.width <= 0 || roi_720p.height <= 0) continue;
+
+            Detection det;
+            det.roi = resized_frame(roi_720p);
+            det.x1 = roi_720p.x;
+            det.y1 = roi_720p.y;
+            det.x2 = roi_720p.x + roi_720p.width;
+            det.y2 = roi_720p.y + roi_720p.height;
+            det.prop = d.prop;
+            dets.push_back(det);
+        }
+
+        nmsDetections(dets, 0.55f);
+        cachedTracks = sort_update(dets);
     }
 
-    vector<Track> tracks = sort_update(dets);
+    vector<Track> tracks = cachedTracks;
     std::unordered_set<int> activeTrackIds;
 
     for (auto& t : tracks) {
