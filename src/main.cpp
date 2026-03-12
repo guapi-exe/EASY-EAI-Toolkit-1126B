@@ -58,6 +58,7 @@ int main(int argc, char** argv) {
 
     std::atomic<bool> sleepMode(false);
     std::unordered_map<int, std::string> groupedUniqueCode;
+    std::unordered_map<int, cv::Mat> pendingPersonById;
 
     auto generateUniqueCode12 = []() {
         static thread_local std::mt19937 rng(std::random_device{}());
@@ -88,6 +89,11 @@ int main(int argc, char** argv) {
             ? config.uploadManualImagePath
             : config.uploadImagePath;
 
+        if (type == "manual") {
+            uploader.enqueue(img, config.cameraNumber, type, targetPath, "");
+            return;
+        }
+
         std::string uniqueCode;
         if ((type == "person" || type == "face") && id > 0) {
             auto it = groupedUniqueCode.find(id);
@@ -98,12 +104,28 @@ int main(int argc, char** argv) {
                 uniqueCode = it->second;
             }
 
-            // 当前逻辑下同组通常是先person再face，face入队后可清理映射。
+            if (type == "person") {
+                // 缓存人形图，等face到来时成对上传。
+                pendingPersonById[id] = img.clone();
+                return;
+            }
+
             if (type == "face") {
+                auto personIt = pendingPersonById.find(id);
+                if (personIt != pendingPersonById.end()) {
+                    uploader.enqueue(personIt->second, config.cameraNumber, "person", targetPath, uniqueCode);
+                    pendingPersonById.erase(personIt);
+                } else {
+                    log_warn("Face upload id=%d has no paired person image, sending face only", id);
+                }
+
+                uploader.enqueue(img, config.cameraNumber, "face", targetPath, uniqueCode);
                 groupedUniqueCode.erase(id);
+                return;
             }
         }
 
+        // 兜底：未知类型沿原逻辑直接上传。
         uploader.enqueue(img, config.cameraNumber, type, targetPath, uniqueCode);
     });
 
