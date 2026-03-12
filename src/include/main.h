@@ -36,5 +36,6 @@
 #define CAPTURE_APPROACH_RATIO_POS      0.08f
 #define CAPTURE_APPROACH_RATIO_NEG     -0.08f
 #define CAPTURE_MIN_TRACK_HITS          3
-#define CAPTURE_REQUIRE_APPROACH        0
-#define CAPTURE_MAX_YAW                 0.90f
+#define CAPTURE_REQUIRE_APPROACH        1
+#define CAPTURE_REQUIRE_FRONTAL_FACE    1
+#define CAPTURE_MAX_YAW                 0.35f

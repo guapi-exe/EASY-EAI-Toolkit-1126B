@@ -521,8 +521,25 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         float current_area_4k = bbox_4k.width * bbox_4k.height;
         float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
 
+        float area_trend_ratio = 0.0f;
+        if (t.bbox_history.size() >= 5) {
+            float area_now = t.bbox_history.back();
+            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
+            area_trend_ratio = (area_now - area_prev) / (area_prev + 1e-6f);
+
+            // 先更新接近状态，再用于后续抓拍门控
+            if (area_trend_ratio > CAPTURE_APPROACH_RATIO_POS) {
+                t.is_approaching = true;
+            } else if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG) {
+                t.is_approaching = false;
+            }
+        }
+
         bool approach_ok = t.is_approaching || (CAPTURE_REQUIRE_APPROACH == 0);
         if (t.has_captured || !approach_ok) {
+            continue;
+        }
+        if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG) {
             continue;
         }
         if (area_ratio <= CAPTURE_MIN_AREA_RATIO || motion_ratio > CAPTURE_MAX_MOTION_RATIO) {
@@ -550,19 +567,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
 
         cv::resize(person_roi, person_roi_resized, Size(target_width, target_height), 0, 0, cv::INTER_LINEAR);
-
-        if (t.bbox_history.size() >= 5) {
-            float area_now = t.bbox_history.back();
-            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
-            float ratio = (area_now - area_prev) / (area_prev + 1e-6f);
-            
-            // 判断是否正在接近摄像机
-            if (ratio > CAPTURE_APPROACH_RATIO_POS) {
-                t.is_approaching = true;
-            } else if (ratio < CAPTURE_APPROACH_RATIO_NEG) {
-                t.is_approaching = false;
-            }
-        }
 
         std::vector<det> face_result;
         int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
@@ -613,6 +617,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         }
         float eye_center_x = (left_eye.x + right_eye.x) / 2.0f;
         float yaw = std::fabs((best_face.landmarks[2].x - eye_center_x) / dx);
+
+        bool frontal_ok = isFrontalFace(best_face.landmarks);
+        if (CAPTURE_REQUIRE_FRONTAL_FACE && !frontal_ok) {
+            continue;
+        }
 
         double current_clarity = computeFocusMeasure(person_roi(base_fbox));
         if (current_clarity <= CAPTURE_MIN_CLARITY) {
