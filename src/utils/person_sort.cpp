@@ -35,6 +35,8 @@ static constexpr int LOST_TRACK_TTL = MAX_MISSED + 15;
 static constexpr int PENDING_TRACK_TTL = 4;
 static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
 
+static Track create_track(const Detection& det, int id);
+
 void sort_init() { 
     tracks.clear(); 
     lost_tracks.clear();
