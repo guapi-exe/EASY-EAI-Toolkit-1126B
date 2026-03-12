@@ -6,6 +6,8 @@ extern "C" {
 #include <random>
 
 namespace {
+constexpr size_t kUploadMaxBytes = 300 * 1024;
+
 std::string generate_unique_code_12() {
     static thread_local std::mt19937 rng(std::random_device{}());
     static const char kChars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -23,6 +25,32 @@ void add_form_field(curl_mime* form, const char* name, const std::string& value)
     curl_mimepart* field = curl_mime_addpart(form);
     curl_mime_name(field, name);
     curl_mime_data(field, value.c_str(), CURL_ZERO_TERMINATED);
+}
+
+std::vector<uchar> encode_image_for_upload(const cv::Mat& img) {
+    std::vector<uchar> buf;
+    cv::imencode(".jpg", img, buf);
+
+    if (buf.size() <= kUploadMaxBytes) {
+        return buf;
+    }
+
+    // 超过300KB则逐步降低质量重编码
+    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 85};
+    for (int quality = 85; quality >= 35; quality -= 10) {
+        params[1] = quality;
+        std::vector<uchar> compressed;
+        cv::imencode(".jpg", img, compressed, params);
+        if (compressed.size() <= kUploadMaxBytes || quality == 35) {
+            log_info("UploaderTask: image compressed from %zuKB to %zuKB (quality=%d)",
+                     buf.size() / 1024,
+                     compressed.size() / 1024,
+                     quality);
+            return compressed;
+        }
+    }
+
+    return buf;
 }
 }
 
@@ -114,8 +142,7 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
     CURL *curl = curl_easy_init();
     if (!curl) return "1";
 
-    std::vector<uchar> buf;
-    cv::imencode(".jpg", img, buf);
+    std::vector<uchar> buf = encode_image_for_upload(img);
     curl_mime *form = curl_mime_init(curl);
     curl_mimepart *field;
 
