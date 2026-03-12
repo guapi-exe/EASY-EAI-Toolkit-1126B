@@ -38,4 +38,4 @@
 #define CAPTURE_MIN_TRACK_HITS          3
 #define CAPTURE_REQUIRE_APPROACH        1
 #define CAPTURE_REQUIRE_FRONTAL_FACE    1
-#define CAPTURE_MAX_YAW                 0.35f
+#define CAPTURE_MAX_YAW                 0.6f
