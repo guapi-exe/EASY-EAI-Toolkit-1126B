@@ -45,6 +45,7 @@ void CameraTask::stop() {
     if (!running && !cameraOpened && !worker.joinable()) return;
     log_info("CameraTask: stopping...");
     running = false;
+    frameCv.notify_all();
 
     // 主动关闭摄像头，打断可能阻塞的取帧调用
     if (cameraOpened.exchange(false)) {
@@ -232,12 +233,35 @@ void CameraTask::run() {
     }
    */
 
-    log_info("CameraTask: starting main processing loop...");
+    log_info("CameraTask: starting capture/inference loops...");
     reportedPersonIds.clear();
-    vector<unsigned char> buffer(IMAGE_SIZE);
+    {
+        std::lock_guard<std::mutex> lock(frameMutex);
+        latestFrame.release();
+        latestFrameSeq = 0;
+        consumedFrameSeq = 0;
+    }
+    captureWorker = std::thread(&CameraTask::captureLoop, this);
+
     while (running) {
-        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) continue;
-        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        Mat frame;
+        {
+            std::unique_lock<std::mutex> lock(frameMutex);
+            frameCv.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                return !running || latestFrameSeq != consumedFrameSeq;
+            });
+
+            if (!running && latestFrameSeq == consumedFrameSeq) {
+                break;
+            }
+            if (latestFrameSeq == consumedFrameSeq) {
+                continue;
+            }
+
+            frame = latestFrame;
+            consumedFrameSeq = latestFrameSeq;
+        }
+
         if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
             log_error("CameraTask: invalid frame dimensions (width=%d, height=%d)", frame.cols, frame.rows);
             continue;
@@ -250,13 +274,42 @@ void CameraTask::run() {
         processFrame(frame, personCtx, faceCtx);
     }
 
-    log_info("CameraTask: main loop exited, cleaning up...");
+    if (captureWorker.joinable()) {
+        captureWorker.join();
+    }
+
+    log_info("CameraTask: inference loop exited, cleaning up...");
     if (cameraOpened.exchange(false)) {
         mipicamera_exit(cameraIndex);
     }
     person_detect_release(personCtx);
     face_detect_release(faceCtx);
     log_info("CameraTask: cleanup completed");
+}
+
+void CameraTask::captureLoop() {
+    std::vector<unsigned char> buffer(IMAGE_SIZE);
+
+    while (running) {
+        if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) {
+            if (!running) {
+                break;
+            }
+            continue;
+        }
+
+        Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
+        if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
+            continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            latestFrame = frame.clone();
+            latestFrameSeq++;
+        }
+        frameCv.notify_one();
+    }
 }
 
 void CameraTask::captureSnapshot() {

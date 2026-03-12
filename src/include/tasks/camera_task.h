@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <string>
 #include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 class CameraTask {
 public:
@@ -33,6 +35,7 @@ public:
 
 private:
     void run();
+    void captureLoop();
     double computeFocusMeasure(const cv::Mat& img);
     bool isFrontalFace(const std::vector<cv::Point2f>& landmarks);
     bool isSideFace(const std::vector<cv::Point2f>& landmarks);
@@ -44,10 +47,17 @@ private:
     int cameraIndex;
 
     std::thread worker;
+    std::thread captureWorker;
     std::atomic<bool> running;
     std::atomic<bool> cameraOpened{false};
     UploadCallback uploadCallback;
     PersonEventCallback personEventCallback;
+
+    std::mutex frameMutex;
+    std::condition_variable frameCv;
+    cv::Mat latestFrame;
+    uint64_t latestFrameSeq{0};
+    uint64_t consumedFrameSeq{0};
 
     std::unordered_set<int> capturedPersonIds;
     std::unordered_set<int> capturedFaceIds;

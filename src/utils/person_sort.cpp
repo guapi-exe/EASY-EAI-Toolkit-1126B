@@ -14,8 +14,19 @@ extern "C" {
 static std::vector<Track> tracks;
 static int next_id = 1;
 
+struct LostTrack {
+    int id;
+    cv::Rect2f bbox;
+    cv::Mat hist;
+    int ttl;
+};
+
+static std::vector<LostTrack> lost_tracks;
+static constexpr int LOST_TRACK_TTL = MAX_MISSED + 15;
+
 void sort_init() { 
     tracks.clear(); 
+    lost_tracks.clear();
     next_id = 1; 
 }
 
@@ -60,6 +71,87 @@ static cv::Mat calc_hist(const cv::Mat& roi) {
 
 static float hist_distance(const cv::Mat& a, const cv::Mat& b) {
     return cv::compareHist(a, b, cv::HISTCMP_BHATTACHARYYA);
+}
+
+static float center_distance_norm(const cv::Rect2f& a, const cv::Rect2f& b) {
+    float ax = a.x + a.width * 0.5f;
+    float ay = a.y + a.height * 0.5f;
+    float bx = b.x + b.width * 0.5f;
+    float by = b.y + b.height * 0.5f;
+    float dx = ax - bx;
+    float dy = ay - by;
+    float diag = std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
+    return std::sqrt(dx * dx + dy * dy) / (diag + 1e-6f);
+}
+
+static void age_lost_tracks() {
+    for (auto& lt : lost_tracks) {
+        lt.ttl--;
+    }
+    lost_tracks.erase(
+        std::remove_if(lost_tracks.begin(), lost_tracks.end(), [](const LostTrack& lt) {
+            return lt.ttl <= 0;
+        }),
+        lost_tracks.end());
+}
+
+static void cache_lost_track(const Track& t) {
+    if (!t.confirmed || t.hist.empty()) {
+        return;
+    }
+
+    lost_tracks.erase(
+        std::remove_if(lost_tracks.begin(), lost_tracks.end(), [&](const LostTrack& lt) {
+            return lt.id == t.id;
+        }),
+        lost_tracks.end());
+
+    LostTrack lt;
+    lt.id = t.id;
+    lt.bbox = t.bbox;
+    lt.hist = t.hist.clone();
+    lt.ttl = LOST_TRACK_TTL;
+    lost_tracks.push_back(std::move(lt));
+}
+
+static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
+    if (lost_tracks.empty() || det_hist.empty()) {
+        return -1;
+    }
+
+    cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
+    float best_score = -1.0f;
+    int best_idx = -1;
+
+    for (int i = 0; i < static_cast<int>(lost_tracks.size()); ++i) {
+        const auto& lt = lost_tracks[i];
+        if (lt.hist.empty()) {
+            continue;
+        }
+
+        float iou_score = iou(lt.bbox, det_rect);
+        float hist_score = hist_distance(lt.hist, det_hist);
+        float center_score = 1.0f - std::min(1.0f, center_distance_norm(lt.bbox, det_rect) / 0.35f);
+
+        if (iou_score < 0.05f || hist_score > 0.6f || center_score < 0.0f) {
+            continue;
+        }
+
+        float score = iou_score * 0.55f + (1.0f - hist_score) * 0.30f + center_score * 0.15f;
+        if (score > best_score) {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+
+    if (best_idx != -1 && best_score >= 0.45f) {
+        int reused_id = lost_tracks[best_idx].id;
+        lost_tracks.erase(lost_tracks.begin() + best_idx);
+        log_debug("Reuse lost track id: %d (score=%.3f)", reused_id, best_score);
+        return reused_id;
+    }
+
+    return -1;
 }
 
 
@@ -215,6 +307,8 @@ static Track create_track(const Detection& det, int id) {
 //-----------------主更新函数-----------------
 
 std::vector<Track> sort_update(const std::vector<Detection>& dets) {
+    age_lost_tracks();
+
     // 预测所有track
     for (auto& t : tracks) predict_track(t);
 
@@ -223,9 +317,15 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     
     if (N == 0) {
         // 没有现有track，直接创建新的
+        std::vector<cv::Mat> det_hists(M);
         for (int j = 0; j < M; j++) {
-            tracks.push_back(create_track(dets[j], next_id++));
-            log_debug("New person appeared: ID=%d", next_id-1);
+            det_hists[j] = calc_hist(dets[j].roi);
+        }
+        for (int j = 0; j < M; j++) {
+            int reused_id = reuse_lost_track_id(dets[j], det_hists[j]);
+            int assigned_id = (reused_id > 0) ? reused_id : next_id++;
+            tracks.push_back(create_track(dets[j], assigned_id));
+            log_debug("New person appeared: ID=%d", assigned_id);
         }
         return tracks;
     }
@@ -234,6 +334,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         auto it = std::remove_if(tracks.begin(), tracks.end(),
                     [](const Track& t){
                         if(t.missed > MAX_MISSED){
+                            cache_lost_track(t);
                             
                             if (upload_callback && !t.frame_candidates.empty() && 
                                 captured_person_ids && captured_face_ids &&
@@ -276,6 +377,11 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     // 计算代价矩阵
     std::vector<std::vector<float>> cost(N, std::vector<float>(M, 1.0f));
 
+    std::vector<cv::Mat> det_hists(M);
+    for (int j = 0; j < M; j++) {
+        det_hists[j] = calc_hist(dets[j].roi);
+    }
+
     for (int i=0; i<N; i++) {
         for (int j=0; j<M; j++) {
             cv::Rect2f det_rect(dets[j].x1, dets[j].y1, 
@@ -285,7 +391,10 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             float iou_score = iou(tracks[i].bbox, det_rect);
             
             // 颜色直方图距离 (0-1, 越小越好) 
-            float hist_score = hist_distance(tracks[i].hist, calc_hist(dets[j].roi));
+            float hist_score = hist_distance(tracks[i].hist, det_hists[j]);
+
+            // 中心点距离归一化（低帧率下比IoU更稳）
+            float center_dist = center_distance_norm(tracks[i].bbox, det_rect);
             
             // 置信度权重
             float conf_weight = std::min(1.0f, dets[j].prop / 0.8f);
@@ -294,14 +403,19 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             float area_ratio = std::min(tracks[i].bbox.area(), det_rect.area()) / 
                               std::max(tracks[i].bbox.area(), det_rect.area());
             
-            // 综合代价：IoU权重0.6, 直方图权重0.3, 置信度权重0.1
-            cost[i][j] = (1.0f - iou_score) * 0.6f + 
-                        hist_score * 0.3f + 
-                        (1.0f - conf_weight) * 0.1f;
+            // 综合代价：IoU权重0.5, 直方图权重0.25, 中心距离权重0.2, 置信度权重0.05
+            cost[i][j] = (1.0f - iou_score) * 0.5f + 
+                        hist_score * 0.25f +
+                        std::min(1.0f, center_dist / 0.25f) * 0.2f +
+                        (1.0f - conf_weight) * 0.05f;
             
             // 如果尺寸差异过大，增加代价
             if (area_ratio < 0.3f) {
                 cost[i][j] += 0.5f;
+            }
+
+            if (center_dist > 0.35f) {
+                cost[i][j] += 0.4f;
             }
         }
     }
@@ -325,8 +439,10 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     // 创建新tracks
     for (int j=0; j<M; j++) {
         if(!det_assigned[j]){
-            tracks.push_back(create_track(dets[j], next_id++));
-            log_debug("New person appeared: ID=%d", next_id-1);
+            int reused_id = reuse_lost_track_id(dets[j], det_hists[j]);
+            int assigned_id = (reused_id > 0) ? reused_id : next_id++;
+            tracks.push_back(create_track(dets[j], assigned_id));
+            log_debug("New person appeared: ID=%d", assigned_id);
         }
     }
     
@@ -334,6 +450,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [](const Track& t){
                     if(t.missed > MAX_MISSED){
+                        cache_lost_track(t);
                         
                         if (upload_callback && !t.frame_candidates.empty() && 
                             captured_person_ids && captured_face_ids &&
