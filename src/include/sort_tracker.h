@@ -42,6 +42,8 @@ struct Track {
         cv::Mat person_roi;
         cv::Mat face_roi;
         bool has_face;
+        bool is_frontal;
+        float yaw_abs;
         double clarity;
         float area_ratio;
     };

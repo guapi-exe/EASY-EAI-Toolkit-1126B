@@ -678,6 +678,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         frame_data.person_roi = person_roi.clone();
         frame_data.face_roi = face_aligned;
         frame_data.has_face = true;
+        frame_data.is_frontal = frontal_ok;
+        frame_data.yaw_abs = yaw;
         frame_data.clarity = current_clarity;
         frame_data.area_ratio = area_ratio;
         add_frame_candidate(t.id, frame_data);

@@ -179,6 +179,37 @@ static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
     return -1;
 }
 
+static size_t select_best_frame_index(const std::vector<Track::FrameData>& frames) {
+    size_t best_index = SIZE_MAX;
+    bool found_frontal = false;
+    float best_yaw = 1e6f;
+    double best_score = -1e12;
+
+    for (size_t i = 0; i < frames.size(); ++i) {
+        const auto& frame = frames[i];
+        if (!frame.has_face) {
+            continue;
+        }
+
+        if (frame.is_frontal) {
+            if (!found_frontal || frame.yaw_abs < best_yaw - 1e-6f ||
+                (std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
+                found_frontal = true;
+                best_yaw = frame.yaw_abs;
+                best_score = frame.score;
+                best_index = i;
+            }
+        } else if (!found_frontal) {
+            if (best_index == SIZE_MAX || frame.score > best_score) {
+                best_score = frame.score;
+                best_index = i;
+            }
+        }
+    }
+
+    return best_index;
+}
+
 static bool should_suppress_new_track(const Detection& det) {
     cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
 
@@ -425,17 +456,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                 captured_person_ids->find(t.id) == captured_person_ids->end() &&
                                 captured_face_ids->find(t.id) == captured_face_ids->end()) {
                                 
-                                double best_score = -1;
-                                size_t best_index = SIZE_MAX;
-                                
-                                // 找到分数最高且有人脸的帧
-                                for (size_t i = 0; i < t.frame_candidates.size(); i++) {
-                                    const auto& frame = t.frame_candidates[i];
-                                    if (frame.has_face && frame.score > best_score) {
-                                        best_score = frame.score;
-                                        best_index = i;
-                                    }
-                                }
+                                size_t best_index = select_best_frame_index(t.frame_candidates);
                                 if (best_index != SIZE_MAX) {
                                     const auto& best_frame = t.frame_candidates[best_index];
                                     upload_callback(best_frame.person_roi, t.id, "person");
@@ -545,17 +566,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                             captured_person_ids->find(t.id) == captured_person_ids->end() &&
                             captured_face_ids->find(t.id) == captured_face_ids->end()) {
                             
-                            double best_score = -1;
-                            size_t best_index = SIZE_MAX;
-                            
-                            // 找到分数最高且有人脸的帧
-                            for (size_t i = 0; i < t.frame_candidates.size(); i++) {
-                                const auto& frame = t.frame_candidates[i];
-                                if (frame.has_face && frame.score > best_score) {
-                                    best_score = frame.score;
-                                    best_index = i;
-                                }
-                            }
+                            size_t best_index = select_best_frame_index(t.frame_candidates);
                             if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");
