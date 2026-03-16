@@ -22,6 +22,17 @@ enum class IrCutMode {
 
 static IrCutMode g_irCutMode = IrCutMode::Unknown;
 static bool g_irCutGpioReady = false;
+static std::chrono::steady_clock::time_point g_lastIrCutSwitchTime =
+    std::chrono::steady_clock::now() - std::chrono::seconds(3600);
+
+constexpr int kIrCutMinSwitchIntervalSec = 20;
+constexpr int kIrCutConsecutiveHits = 2;
+
+bool canSwitchIrCutNow() {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - g_lastIrCutSwitchTime).count();
+    return elapsed >= kIrCutMinSwitchIntervalSec;
+}
 
 bool writeSysfsValue(const std::string& path, const std::string& value) {
     std::ofstream ofs(path);
@@ -50,11 +61,15 @@ void switchIrCutWhite() {
     if (g_irCutMode == IrCutMode::White) {
         return;
     }
+    if (!canSwitchIrCutNow()) {
+        return;
+    }
     ensureIrCutGpioReady();
     writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
     writeSysfsValue("/sys/class/gpio/gpio185/value", "0");
     writeSysfsValue("/sys/class/gpio/gpio184/value", "0");
     g_irCutMode = IrCutMode::White;
+    g_lastIrCutSwitchTime = std::chrono::steady_clock::now();
     log_info("CameraTask: IR-CUT switched to WHITE mode");
 }
 
@@ -62,11 +77,15 @@ void switchIrCutBlack() {
     if (g_irCutMode == IrCutMode::Black) {
         return;
     }
+    if (!canSwitchIrCutNow()) {
+        return;
+    }
     ensureIrCutGpioReady();
     writeSysfsValue("/sys/class/gpio/gpio184/value", "0");
     writeSysfsValue("/sys/class/gpio/gpio185/value", "1");
     writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
     g_irCutMode = IrCutMode::Black;
+    g_lastIrCutSwitchTime = std::chrono::steady_clock::now();
     log_info("CameraTask: IR-CUT switched to BLACK mode");
 }
 
@@ -432,8 +451,11 @@ void CameraTask::captureLoop() {
     auto captureFpsWindowStart = std::chrono::steady_clock::now();
     long captureFramesInWindow = 0;
     int brightnessSampleCounter = 0;
+    int whiteCandidateHits = 0;
+    int blackCandidateHits = 0;
 
     // 默认先使用白片，后续再按亮度阈值自动切换。
+    g_lastIrCutSwitchTime = std::chrono::steady_clock::now() - std::chrono::seconds(3600);
     switchIrCutWhite();
 
     while (running) {
@@ -455,9 +477,20 @@ void CameraTask::captureLoop() {
             environmentBrightness = brightness;
 
             if (brightness >= CAMERA_BRIGHTNESS_WHITE_THRESHOLD) {
-                switchIrCutWhite();
+                whiteCandidateHits++;
+                blackCandidateHits = 0;
+                if (whiteCandidateHits >= kIrCutConsecutiveHits) {
+                    switchIrCutWhite();
+                }
             } else if (brightness <= CAMERA_BRIGHTNESS_BLACK_THRESHOLD) {
-                switchIrCutBlack();
+                blackCandidateHits++;
+                whiteCandidateHits = 0;
+                if (blackCandidateHits >= kIrCutConsecutiveHits) {
+                    switchIrCutBlack();
+                }
+            } else {
+                whiteCandidateHits = 0;
+                blackCandidateHits = 0;
             }
         }
 
