@@ -53,12 +53,27 @@ void TcpClient::setCommandCallback(CommandCallback cb) {
     commandCallback = cb;
 }
 
+void TcpClient::setBrightnessProvider(BrightnessProvider provider) {
+    std::lock_guard<std::mutex> lock(cbMtx);
+    brightnessProvider = provider;
+}
+
 void TcpClient::sendPersonAppeared(int personId) {
     json j = {
         {"type", "event"},
-        {"event", "person_appeared"},
+        {"event", "person_immediate"},
         {"camera_number", config->cameraNumber},
         {"person_id", personId},
+        {"ts", (long long)time(nullptr)}
+    };
+    queueJsonLine(j.dump());
+}
+
+void TcpClient::sendAllPersonLeft() {
+    json j = {
+        {"type", "event"},
+        {"event", "all_person_left"},
+        {"camera_number", config->cameraNumber},
         {"ts", (long long)time(nullptr)}
     };
     queueJsonLine(j.dump());
@@ -357,7 +372,15 @@ void TcpClient::heartbeatLoop() {
     }
 }
 
-std::string TcpClient::buildHeartbeatJson() const {
+std::string TcpClient::buildHeartbeatJson() {
+    double envBrightness = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(cbMtx);
+        if (brightnessProvider) {
+            envBrightness = brightnessProvider();
+        }
+    }
+
     json j = {
         {"type", "heartbeat"},
         {"device_code", config->deviceCode},
@@ -365,6 +388,7 @@ std::string TcpClient::buildHeartbeatJson() const {
         {"cpu_temp_c", readCpuTemperatureC()},
         {"cpu_usage", readCpuUsagePercent()},
         {"mem_usage", readMemoryUsagePercent()},
+        {"env_brightness", envBrightness},
         {"ts", (long long)time(nullptr)}
     };
     return j.dump();

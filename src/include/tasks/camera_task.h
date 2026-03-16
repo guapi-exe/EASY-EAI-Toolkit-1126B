@@ -27,6 +27,7 @@ public:
     void setUploadCallback(UploadCallback cb);
     void setPersonEventCallback(PersonEventCallback cb);
     void captureSnapshot();
+    double getEnvironmentBrightness() const { return environmentBrightness.load(); }
     
     // 帧数统计相关函数
     long getTotalFrames() const { return totalFrames; }
@@ -78,4 +79,6 @@ private:
     // 人脸检测降频：每个track独立计数
     std::unordered_map<int, int> trackFaceDetectSkipCounters;
     std::unordered_set<int> reportedPersonIds;
+    std::atomic<double> environmentBrightness{0.0};
+    bool hadPersonsInScene{false};
 };

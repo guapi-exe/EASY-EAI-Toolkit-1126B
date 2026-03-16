@@ -13,19 +13,25 @@ Each packet is one JSON object terminated by `\n`.
 1. Heartbeat
 
 ```json
-{"type":"heartbeat","device_code":"00000001","camera_number":1,"cpu_temp_c":52.3,"cpu_usage":31.5,"mem_usage":48.2,"ts":1700000001}
+{"type":"heartbeat","device_code":"00000001","camera_number":1,"cpu_temp_c":52.3,"cpu_usage":31.5,"mem_usage":48.2,"env_brightness":86.4,"ts":1700000001}
 ```
 
-1. Person Appeared Event
+1. Person Immediate Event
 
 ```json
-{"type":"event","event":"person_appeared","camera_number":1,"person_id":12,"ts":1700000002}
+{"type":"event","event":"person_immediate","camera_number":1,"person_id":12,"ts":1700000002}
+```
+
+1. All Person Left Event
+
+```json
+{"type":"event","event":"all_person_left","camera_number":1,"ts":1700000003}
 ```
 
 1. Capture Complete Event
 
 ```json
-{"type":"event","event":"capture_complete","camera_number":1,"person_id":12,"image_type":"face","ts":1700000003}
+{"type":"event","event":"capture_complete","camera_number":1,"person_id":12,"image_type":"face","ts":1700000004}
 ```
 
 ## Server -> Device

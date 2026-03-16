@@ -81,7 +81,16 @@ int main(int argc, char** argv) {
     camera.setPersonEventCallback([&](int personId, const std::string& eventType) {
         if (eventType == "person_appeared") {
             tcpClient.sendPersonAppeared(personId);
+            return;
         }
+
+        if (eventType == "all_person_left") {
+            tcpClient.sendAllPersonLeft();
+        }
+    });
+
+    tcpClient.setBrightnessProvider([&]() {
+        return camera.getEnvironmentBrightness();
     });
 
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type) {

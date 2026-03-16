@@ -3,6 +3,7 @@
 #include "person_detect.h"
 #include "face_detect.h"
 #include "sort_tracker.h"
+#include <fstream>
 extern "C" {
 #include "log.h"
 #include "camera.h"
@@ -11,6 +12,77 @@ extern "C" {
 
 using namespace cv;
 using namespace std;
+
+namespace {
+enum class IrCutMode {
+    Unknown = 0,
+    White,
+    Black,
+};
+
+static IrCutMode g_irCutMode = IrCutMode::Unknown;
+static bool g_irCutGpioReady = false;
+
+bool writeSysfsValue(const std::string& path, const std::string& value) {
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) {
+        return false;
+    }
+    ofs << value;
+    return ofs.good();
+}
+
+void ensureIrCutGpioReady() {
+    if (g_irCutGpioReady) {
+        return;
+    }
+
+    // 重复export允许失败(已经export会返回busy)
+    writeSysfsValue("/sys/class/gpio/export", "184");
+    writeSysfsValue("/sys/class/gpio/export", "185");
+    writeSysfsValue("/sys/class/gpio/gpio184/direction", "out");
+    writeSysfsValue("/sys/class/gpio/gpio185/direction", "out");
+
+    g_irCutGpioReady = true;
+}
+
+void switchIrCutWhite() {
+    if (g_irCutMode == IrCutMode::White) {
+        return;
+    }
+    ensureIrCutGpioReady();
+    writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
+    writeSysfsValue("/sys/class/gpio/gpio185/value", "0");
+    writeSysfsValue("/sys/class/gpio/gpio184/value", "0");
+    g_irCutMode = IrCutMode::White;
+    log_info("CameraTask: IR-CUT switched to WHITE mode");
+}
+
+void switchIrCutBlack() {
+    if (g_irCutMode == IrCutMode::Black) {
+        return;
+    }
+    ensureIrCutGpioReady();
+    writeSysfsValue("/sys/class/gpio/gpio184/value", "0");
+    writeSysfsValue("/sys/class/gpio/gpio185/value", "1");
+    writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
+    g_irCutMode = IrCutMode::Black;
+    log_info("CameraTask: IR-CUT switched to BLACK mode");
+}
+
+double computeSceneBrightnessFast(const cv::Mat& frame) {
+    if (frame.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat small;
+    cv::resize(frame, small, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
+    cv::Mat gray;
+    cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+    cv::Scalar meanValue = cv::mean(gray);
+    return meanValue[0];
+}
+}
 
 static float rect_iou(const cv::Rect& a, const cv::Rect& b) {
     int xx1 = std::max(a.x, b.x);
@@ -342,6 +414,10 @@ void CameraTask::captureLoop() {
     std::vector<unsigned char> buffer(IMAGE_SIZE);
     auto captureFpsWindowStart = std::chrono::steady_clock::now();
     long captureFramesInWindow = 0;
+    int brightnessSampleCounter = 0;
+
+    // 默认先使用白片，后续再按亮度阈值自动切换。
+    switchIrCutWhite();
 
     while (running) {
         if (mipicamera_getframe(cameraIndex, reinterpret_cast<char*>(buffer.data())) != 0) {
@@ -354,6 +430,18 @@ void CameraTask::captureLoop() {
         Mat frame(CAMERA_HEIGHT, CAMERA_WIDTH, CV_8UC3, buffer.data());
         if (frame.empty() || frame.cols <= 0 || frame.rows <= 0) {
             continue;
+        }
+
+        brightnessSampleCounter++;
+        if (brightnessSampleCounter % CAMERA_BRIGHTNESS_SAMPLE_INTERVAL == 0) {
+            double brightness = computeSceneBrightnessFast(frame);
+            environmentBrightness = brightness;
+
+            if (brightness >= CAMERA_BRIGHTNESS_WHITE_THRESHOLD) {
+                switchIrCutWhite();
+            } else if (brightness <= CAMERA_BRIGHTNESS_BLACK_THRESHOLD) {
+                switchIrCutBlack();
+            }
         }
 
         {
@@ -708,4 +796,12 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             ++it;
         }
     }
+
+    bool hasPersons = !activeTrackIds.empty();
+    if (hadPersonsInScene && !hasPersons) {
+        if (personEventCallback) {
+            personEventCallback(-1, "all_person_left");
+        }
+    }
+    hadPersonsInScene = hasPersons;
 }

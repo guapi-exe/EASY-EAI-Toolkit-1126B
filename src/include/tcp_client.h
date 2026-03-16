@@ -12,6 +12,7 @@
 class TcpClient {
 public:
     using CommandCallback = std::function<void(const std::string& cmdType, const std::string& payload)>;
+    using BrightnessProvider = std::function<double()>;
 
     TcpClient(DeviceConfig* config, const std::string& configPath);
     ~TcpClient();
@@ -20,8 +21,10 @@ public:
     void stop();
 
     void setCommandCallback(CommandCallback cb);
+    void setBrightnessProvider(BrightnessProvider provider);
 
     void sendPersonAppeared(int personId);
+    void sendAllPersonLeft();
     void sendCaptureComplete(int personId, const std::string& imageType);
 
 private:
@@ -34,7 +37,7 @@ private:
     void handleMessage(const std::string& line);
 
     void queueJsonLine(const std::string& jsonLine);
-    std::string buildHeartbeatJson() const;
+    std::string buildHeartbeatJson();
 
     static double readCpuUsagePercent();
     static double readMemoryUsagePercent();
@@ -58,4 +61,5 @@ private:
 
     std::mutex cbMtx;
     CommandCallback commandCallback;
+    BrightnessProvider brightnessProvider;
 };
