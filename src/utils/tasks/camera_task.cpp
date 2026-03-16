@@ -29,6 +29,24 @@ constexpr int kIrCutMinSwitchIntervalSec = 60;
 constexpr int kIrCutConsecutiveHits = 3;
 constexpr int kIrCutSettleAfterSwitchSec = 8;
 
+double updateFilteredBrightness(double prev, double raw) {
+    if (prev < 0.0) {
+        return raw;
+    }
+
+    double diff = std::fabs(raw - prev);
+    double alpha = 0.20;
+    if (diff >= 40.0) {
+        alpha = 0.75;
+    } else if (diff >= 20.0) {
+        alpha = 0.55;
+    } else if (diff >= 8.0) {
+        alpha = 0.35;
+    }
+
+    return prev * (1.0 - alpha) + raw * alpha;
+}
+
 const char* irCutModeToString(IrCutMode mode) {
     switch (mode) {
         case IrCutMode::White:
@@ -480,12 +498,7 @@ void CameraTask::captureLoop() {
         if (brightnessSampleCounter % CAMERA_BRIGHTNESS_SAMPLE_INTERVAL == 0) {
             double brightnessRaw = computeSceneBrightnessFast(frame);
             lastBrightnessRaw = brightnessRaw;
-            if (filteredBrightness < 0.0) {
-                filteredBrightness = brightnessRaw;
-            } else {
-                // 低通平滑，抑制阈值附近抖动。
-                filteredBrightness = filteredBrightness * 0.75 + brightnessRaw * 0.25;
-            }
+            filteredBrightness = updateFilteredBrightness(filteredBrightness, brightnessRaw);
             environmentBrightness = filteredBrightness;
 
             auto now = std::chrono::steady_clock::now();
