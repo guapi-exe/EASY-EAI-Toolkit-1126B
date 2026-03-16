@@ -75,12 +75,29 @@ double computeSceneBrightnessFast(const cv::Mat& frame) {
         return 0.0;
     }
 
-    cv::Mat small;
-    cv::resize(frame, small, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
-    cv::Mat gray;
-    cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
-    cv::Scalar meanValue = cv::mean(gray);
-    return meanValue[0];
+    // 稀疏采样降低开销：每16个像素取一个点估算亮度。
+    const int step = 16;
+    double acc = 0.0;
+    int samples = 0;
+
+    for (int y = 0; y < frame.rows; y += step) {
+        const uchar* row = frame.ptr<uchar>(y);
+        for (int x = 0; x < frame.cols; x += step) {
+            const int idx = x * 3;
+            const uchar b = row[idx + 0];
+            const uchar g = row[idx + 1];
+            const uchar r = row[idx + 2];
+            // 使用整数近似灰度，避免浮点乘法热点。
+            const int gray = (77 * r + 150 * g + 29 * b) >> 8;
+            acc += gray;
+            ++samples;
+        }
+    }
+
+    if (samples <= 0) {
+        return 0.0;
+    }
+    return acc / static_cast<double>(samples);
 }
 }
 
@@ -444,12 +461,19 @@ void CameraTask::captureLoop() {
             }
         }
 
+        bool published = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            latestFrame = frame.clone();
-            latestFrameSeq++;
+            // 推理线程尚未消费上一帧时，直接丢弃当前帧，避免无效4K拷贝。
+            if (latestFrameSeq == consumedFrameSeq) {
+                latestFrame = frame.clone();
+                latestFrameSeq++;
+                published = true;
+            }
         }
-        frameCv.notify_one();
+        if (published) {
+            frameCv.notify_one();
+        }
 
         captureFramesInWindow++;
         auto now = std::chrono::steady_clock::now();

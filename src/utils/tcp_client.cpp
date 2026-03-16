@@ -15,6 +15,7 @@ extern "C" {
 #include <unistd.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -308,13 +309,17 @@ void TcpClient::handleMessage(const std::string& line) {
 }
 
 void TcpClient::workerLoop() {
+    int reconnectBackoffSec = std::max(1, config->reconnectIntervalSec);
+
     while (running) {
         if (!connected) {
             tryConnect();
             if (!connected) {
-                std::this_thread::sleep_for(std::chrono::seconds(config->reconnectIntervalSec));
+                std::this_thread::sleep_for(std::chrono::seconds(reconnectBackoffSec));
+                reconnectBackoffSec = std::min(reconnectBackoffSec * 2, 30);
                 continue;
             }
+            reconnectBackoffSec = std::max(1, config->reconnectIntervalSec);
         }
 
         flushSendQueue();
