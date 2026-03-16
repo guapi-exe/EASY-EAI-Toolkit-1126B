@@ -106,29 +106,20 @@ double computeSceneBrightnessFast(const cv::Mat& frame) {
         return 0.0;
     }
 
-    // 稀疏采样降低开销：每16个像素取一个点估算亮度。
-    const int step = 16;
-    double acc = 0.0;
-    int samples = 0;
+    // 低频调用(每N帧一次)下使用缩小+灰度均值更稳，避免手写采样在不同像素格式下偏差。
+    cv::Mat small;
+    cv::resize(frame, small, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
 
-    for (int y = 0; y < frame.rows; y += step) {
-        const uchar* row = frame.ptr<uchar>(y);
-        for (int x = 0; x < frame.cols; x += step) {
-            const int idx = x * 3;
-            const uchar b = row[idx + 0];
-            const uchar g = row[idx + 1];
-            const uchar r = row[idx + 2];
-            // 使用整数近似灰度，避免浮点乘法热点。
-            const int gray = (77 * r + 150 * g + 29 * b) >> 8;
-            acc += gray;
-            ++samples;
-        }
-    }
-
-    if (samples <= 0) {
+    cv::Mat gray;
+    if (small.channels() == 3) {
+        cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+    } else if (small.channels() == 1) {
+        gray = small;
+    } else {
         return 0.0;
     }
-    return acc / static_cast<double>(samples);
+
+    return cv::mean(gray)[0];
 }
 }
 
@@ -465,6 +456,7 @@ void CameraTask::captureLoop() {
     int brightnessSampleCounter = 0;
     int whiteCandidateHits = 0;
     int blackCandidateHits = 0;
+    double lastBrightnessRaw = 0.0;
     double filteredBrightness = -1.0;
 
     // 默认先使用白片，后续再按亮度阈值自动切换。
@@ -487,6 +479,7 @@ void CameraTask::captureLoop() {
         brightnessSampleCounter++;
         if (brightnessSampleCounter % CAMERA_BRIGHTNESS_SAMPLE_INTERVAL == 0) {
             double brightnessRaw = computeSceneBrightnessFast(frame);
+            lastBrightnessRaw = brightnessRaw;
             if (filteredBrightness < 0.0) {
                 filteredBrightness = brightnessRaw;
             } else {
@@ -541,9 +534,10 @@ void CameraTask::captureLoop() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsWindowStart).count();
         if (elapsed >= 5) {
             double captureFps = static_cast<double>(captureFramesInWindow) / static_cast<double>(elapsed);
-            log_info("Capture FPS: fps=%.2f, brightness=%.1f, ircut=%s",
+            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s",
                      captureFps,
                      environmentBrightness.load(),
+                     lastBrightnessRaw,
                      irCutModeToString(g_irCutMode));
             captureFpsWindowStart = now;
             captureFramesInWindow = 0;
