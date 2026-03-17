@@ -111,9 +111,9 @@ void switchIrCutBlack() {
         return;
     }
     ensureIrCutGpioReady();
-    writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
-    writeSysfsValue("/sys/class/gpio/gpio185/value", "0");
     writeSysfsValue("/sys/class/gpio/gpio184/value", "0");
+    writeSysfsValue("/sys/class/gpio/gpio185/value", "1");
+    writeSysfsValue("/sys/class/gpio/gpio184/value", "1");
     g_irCutMode = IrCutMode::Black;
     g_lastIrCutSwitchTime = std::chrono::steady_clock::now();
     log_info("CameraTask: IR-CUT switched to BLACK mode");
