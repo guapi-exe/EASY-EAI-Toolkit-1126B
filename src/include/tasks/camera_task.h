@@ -26,6 +26,8 @@ public:
     void stop();
     void setUploadCallback(UploadCallback cb);
     void setPersonEventCallback(PersonEventCallback cb);
+    void setBrightnessBlackThreshold(double threshold) { brightnessBlackThreshold.store(threshold); }
+    double getBrightnessBlackThreshold() const { return brightnessBlackThreshold.load(); }
     void captureSnapshot();
     double getEnvironmentBrightness() const { return environmentBrightness.load(); }
     
@@ -80,5 +82,6 @@ private:
     std::unordered_map<int, int> trackFaceDetectSkipCounters;
     std::unordered_set<int> reportedPersonIds;
     std::atomic<double> environmentBrightness{0.0};
+    std::atomic<double> brightnessBlackThreshold{CAMERA_BRIGHTNESS_BLACK_THRESHOLD};
     bool hadPersonsInScene{false};
 };

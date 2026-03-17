@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
     UploaderTask uploader(config.deviceCode, config.uploadServer);
     CameraTask camera(PERSON_MODEL_PATH, FACE_MODEL_PATH, CAMERA_INDEX_1);
     TcpClient tcpClient(&config, configPath);
+    camera.setBrightnessBlackThreshold(config.brightnessBlackThreshold);
 
     std::atomic<bool> sleepMode(false);
     std::unordered_map<int, std::string> groupedUniqueCode;
@@ -168,8 +169,11 @@ int main(int argc, char** argv) {
         if (cmdType == "config_update") {
             uploader.setServerUrl(config.uploadServer);
             uploader.setEqCode(config.deviceCode);
+            camera.setBrightnessBlackThreshold(config.brightnessBlackThreshold);
             log_info("Config updated: upload server=%s, device_code=%s",
                      config.uploadServer.c_str(), config.deviceCode.c_str());
+            log_info("Config updated: ircut brightness_black_threshold=%.1f",
+                     config.brightnessBlackThreshold);
             return;
         }
     });

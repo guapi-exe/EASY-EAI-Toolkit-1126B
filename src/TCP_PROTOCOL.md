@@ -69,7 +69,8 @@ Meaning: trigger immediate snapshot.
   "config":{
     "device":{"code":"12345678"},
     "upload":{"server":"http://192.168.1.2:11100","image_path":"/receive/image/auto/minio"},
-    "tcp":{"server_ip":"192.168.1.1","port":19000,"heartbeat_interval_sec":10,"reconnect_interval_sec":3}
+    "tcp":{"server_ip":"192.168.1.1","port":19000,"heartbeat_interval_sec":10,"reconnect_interval_sec":3},
+    "ircut":{"brightness_black_threshold":80.0}
   }
 }
 ```

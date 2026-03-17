@@ -4,6 +4,7 @@
 #include "main.h"
 
 #include <fstream>
+#include <algorithm>
 
 using nlohmann::json;
 
@@ -39,7 +40,11 @@ static json buildDefaultJson(const DeviceConfig& cfg) {
         {"approach_ratio_neg", CAPTURE_APPROACH_RATIO_NEG},
         {"min_track_hits", CAPTURE_MIN_TRACK_HITS},
         {"require_approach", CAPTURE_REQUIRE_APPROACH},
-        {"max_yaw", CAPTURE_MAX_YAW}
+        {"max_yaw", CAPTURE_MAX_YAW},
+        {"brightness_black_threshold", cfg.brightnessBlackThreshold}
+    };
+    j["ircut"] = {
+        {"brightness_black_threshold", cfg.brightnessBlackThreshold}
     };
     return j;
 }
@@ -76,6 +81,20 @@ static void loadFromJson(DeviceConfig* cfg, const json& j) {
         }
         if (j["tcp"].contains("reconnect_interval_sec")) {
             cfg->reconnectIntervalSec = j["tcp"]["reconnect_interval_sec"].get<int>();
+        }
+    }
+
+    if (j.contains("ircut") && j["ircut"].is_object()) {
+        if (j["ircut"].contains("brightness_black_threshold")) {
+            double v = j["ircut"]["brightness_black_threshold"].get<double>();
+            cfg->brightnessBlackThreshold = std::max(0.0, std::min(255.0, v));
+        }
+    }
+
+    if (j.contains("capture_defaults") && j["capture_defaults"].is_object()) {
+        if (j["capture_defaults"].contains("brightness_black_threshold")) {
+            double v = j["capture_defaults"]["brightness_black_threshold"].get<double>();
+            cfg->brightnessBlackThreshold = std::max(0.0, std::min(255.0, v));
         }
     }
 }

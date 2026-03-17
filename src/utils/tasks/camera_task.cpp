@@ -503,6 +503,7 @@ void CameraTask::captureLoop() {
 
             auto now = std::chrono::steady_clock::now();
             auto sinceLastSwitch = std::chrono::duration_cast<std::chrono::seconds>(now - g_lastIrCutSwitchTime).count();
+            const double blackThreshold = brightnessBlackThreshold.load();
             if (sinceLastSwitch < kIrCutSettleAfterSwitchSec) {
                 whiteCandidateHits = 0;
                 blackCandidateHits = 0;
@@ -514,7 +515,7 @@ void CameraTask::captureLoop() {
                     whiteCandidateHits = 0;
                     blackCandidateHits = 0;
                 }
-            } else if (filteredBrightness <= CAMERA_BRIGHTNESS_BLACK_THRESHOLD) {
+            } else if (filteredBrightness <= blackThreshold) {
                 blackCandidateHits++;
                 whiteCandidateHits = 0;
                 if (blackCandidateHits >= kIrCutConsecutiveHits) {
@@ -547,11 +548,12 @@ void CameraTask::captureLoop() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsWindowStart).count();
         if (elapsed >= 5) {
             double captureFps = static_cast<double>(captureFramesInWindow) / static_cast<double>(elapsed);
-            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s",
+            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s, black_th=%.1f",
                      captureFps,
                      environmentBrightness.load(),
                      lastBrightnessRaw,
-                     irCutModeToString(g_irCutMode));
+                     irCutModeToString(g_irCutMode),
+                     brightnessBlackThreshold.load());
             captureFpsWindowStart = now;
             captureFramesInWindow = 0;
         }

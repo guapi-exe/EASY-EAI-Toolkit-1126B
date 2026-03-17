@@ -14,6 +14,7 @@ struct DeviceConfig {
     int tcpPort = 19000;
     int heartbeatIntervalSec = 10;
     int reconnectIntervalSec = 3;
+    double brightnessBlackThreshold = CAMERA_BRIGHTNESS_BLACK_THRESHOLD;
 
     bool loadOrCreate(const std::string& filePath);
     bool save(const std::string& filePath) const;
