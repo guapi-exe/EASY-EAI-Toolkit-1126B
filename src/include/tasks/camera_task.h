@@ -1,6 +1,7 @@
 #pragma once
 #include <opencv2/opencv.hpp>
 #include "rknn_api.h"
+#include "main.h"
 #include <thread>
 #include <atomic>
 #include <functional>
