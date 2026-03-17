@@ -38,7 +38,7 @@
 #define CAPTURE_MIN_TRACK_HITS          3
 #define CAPTURE_REQUIRE_APPROACH        1
 #define CAPTURE_REQUIRE_FRONTAL_FACE    1
-#define CAPTURE_MAX_YAW                 0.7f
+#define CAPTURE_MAX_YAW                 0.8f
 
 // 亮度与IR-CUT配置
 #define CAMERA_BRIGHTNESS_SAMPLE_INTERVAL  5
