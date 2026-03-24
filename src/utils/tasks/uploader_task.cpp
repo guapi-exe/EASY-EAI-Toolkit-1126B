@@ -1,4 +1,5 @@
 #include "uploader_task.h"
+#include "nafnet_tiny_enhancer.h"
 extern "C" {
 #include "log.h"
 }
@@ -429,7 +430,11 @@ cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
 }
 }
 
-UploaderTask::UploaderTask(const std::string& eqCode, const std::string& url) : eqCode(eqCode), serverUrl(url), running(false) {}
+UploaderTask::UploaderTask(const std::string& eqCode, const std::string& url)
+        : eqCode(eqCode),
+            serverUrl(url),
+            running(false),
+            faceEnhancer(std::make_unique<NAFNetTinyEnhancer>(NAFNET_TINY_MODEL_PATH)) {}
 
 UploaderTask::~UploaderTask() { stop(); }
 
@@ -527,7 +532,18 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
 
     cv::Mat processed = img;
     if (type == "face") {
-        processed = motion_deblur_enhance_face(img);
+        cv::Mat ai_face;
+        if (faceEnhancer && faceEnhancer->isReady()) {
+            ai_face = faceEnhancer->enhance(img);
+        }
+
+        if (!ai_face.empty()) {
+            cv::Mat classic_face = motion_deblur_enhance_face(ai_face);
+            cv::addWeighted(ai_face, 0.72, classic_face, 0.28, 0, processed);
+            log_debug("UploaderTask: face enhanced by NAFNet-tiny");
+        } else {
+            processed = motion_deblur_enhance_face(img);
+        }
     } else if (type == "person") {
         processed = motion_deblur_enhance_person(img);
     }

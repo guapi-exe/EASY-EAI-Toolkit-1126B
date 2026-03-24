@@ -15,6 +15,7 @@
 
 #define PERSON_MODEL_PATH   "person_detect.model"
 #define FACE_MODEL_PATH     "face_detect.model"
+#define NAFNET_TINY_MODEL_PATH "nafnet_tiny.rknn"
 
 #define RETIAN_MODEL_TYPE   0 
 #define RETIAN_INPUT_H      480
