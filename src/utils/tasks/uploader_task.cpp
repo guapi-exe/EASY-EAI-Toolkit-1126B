@@ -539,8 +539,7 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
         }
 
         if (!ai_face.empty()) {
-            cv::Mat classic_face = motion_deblur_enhance_face(ai_face);
-            cv::addWeighted(ai_face, 0.72, classic_face, 0.28, 0, processed);
+            processed = ai_face;
             log_debug("UploaderTask: face enhanced by NAFNet-tiny");
         } else {
             processed = motion_deblur_enhance_face(img);
