@@ -342,7 +342,15 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
         return false;
     }
     if (candidateEvalQueue.size() >= CAPTURE_CANDIDATE_QUEUE_MAX) {
-        return false;
+        int dropped_track_id = candidateEvalQueue.front().trackId;
+        candidateEvalQueue.pop_front();
+        auto dropped_it = pendingCandidateEvalByTrack.find(dropped_track_id);
+        if (dropped_it != pendingCandidateEvalByTrack.end()) {
+            dropped_it->second--;
+            if (dropped_it->second <= 0) {
+                pendingCandidateEvalByTrack.erase(dropped_it);
+            }
+        }
     }
 
     pendingCandidateEvalByTrack[job.trackId] = pending_for_track + 1;
@@ -962,14 +970,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             }
         }
 
-        bool approach_ok = t.is_approaching || (CAPTURE_REQUIRE_APPROACH == 0);
+        bool near_ok = area_ratio >= CAPTURE_NEAR_AREA_RATIO;
+        bool approach_ok = t.is_approaching || near_ok || (CAPTURE_REQUIRE_APPROACH == 0);
         if (t.has_captured || !approach_ok) {
             continue;
         }
-        if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG) {
+        if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG && !near_ok) {
             continue;
         }
-        if (area_ratio <= CAPTURE_MIN_AREA_RATIO || motion_ratio > CAPTURE_MAX_MOTION_RATIO) {
+        if (area_ratio <= CAPTURE_MIN_AREA_RATIO || motion_ratio > CAPTURE_MAX_MOTION_REJECT_RATIO) {
             continue;
         }
 
