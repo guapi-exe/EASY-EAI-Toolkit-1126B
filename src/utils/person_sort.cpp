@@ -184,6 +184,11 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
     bool found_frontal = false;
     float best_yaw = 1e6f;
     double best_score = -1e12;
+    float best_occlusion = 1e6f;
+
+    auto occlusion_of = [](const Track::FrameData& frame) {
+        return frame.person_occlusion * 0.7f + frame.face_edge_occlusion * 0.3f;
+    };
 
     for (size_t i = 0; i < frames.size(); ++i) {
         const auto& frame = frames[i];
@@ -191,16 +196,24 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
             continue;
         }
 
+        float frame_occlusion = occlusion_of(frame);
+
         if (frame.is_frontal) {
-            if (!found_frontal || frame.yaw_abs < best_yaw - 1e-6f ||
-                (std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
+            if (!found_frontal ||
+                frame_occlusion < best_occlusion - 0.02f ||
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.yaw_abs < best_yaw - 1e-6f) ||
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
                 found_frontal = true;
+                best_occlusion = frame_occlusion;
                 best_yaw = frame.yaw_abs;
                 best_score = frame.score;
                 best_index = i;
             }
         } else if (!found_frontal) {
-            if (best_index == SIZE_MAX || frame.score > best_score) {
+            if (best_index == SIZE_MAX ||
+                frame_occlusion < best_occlusion - 0.02f ||
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.score > best_score)) {
+                best_occlusion = frame_occlusion;
                 best_score = frame.score;
                 best_index = i;
             }
@@ -461,8 +474,9 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                     const auto& best_frame = t.frame_candidates[best_index];
                                     upload_callback(best_frame.person_roi, t.id, "person");
                                     upload_callback(best_frame.face_roi, t.id, "face");
-                                    log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
-                                             t.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
+                                    float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
+                                    log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 综合评分: %.2f)",
+                                             t.id, best_frame.clarity, best_frame.area_ratio*100, occ, best_frame.score);
                                     
                                     captured_person_ids->insert(t.id);
                                     captured_face_ids->insert(t.id);
@@ -571,8 +585,9 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                 const auto& best_frame = t.frame_candidates[best_index];
                                 upload_callback(best_frame.person_roi, t.id, "person");
                                 upload_callback(best_frame.face_roi, t.id, "face");
-                                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 综合评分: %.2f)", 
-                                         t.id, best_frame.clarity, best_frame.area_ratio*100, best_frame.score);
+                                float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
+                                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 综合评分: %.2f)",
+                                         t.id, best_frame.clarity, best_frame.area_ratio*100, occ, best_frame.score);
                                 
                                 captured_person_ids->insert(t.id);
                                 captured_face_ids->insert(t.id);

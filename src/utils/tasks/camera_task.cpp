@@ -153,6 +153,18 @@ static float rect_iou(const cv::Rect& a, const cv::Rect& b) {
     return inter / (uni + 1e-6f);
 }
 
+static float rect_overlap_ratio_on_a(const cv::Rect& a, const cv::Rect& b) {
+    int xx1 = std::max(a.x, b.x);
+    int yy1 = std::max(a.y, b.y);
+    int xx2 = std::min(a.x + a.width, b.x + b.width);
+    int yy2 = std::min(a.y + a.height, b.y + b.height);
+    int w = std::max(0, xx2 - xx1);
+    int h = std::max(0, yy2 - yy1);
+    float inter = static_cast<float>(w * h);
+    float a_area = static_cast<float>(std::max(1, a.area()));
+    return inter / a_area;
+}
+
 static void nmsDetections(std::vector<Detection>& dets, float iouThreshold) {
     if (dets.size() <= 1) {
         return;
@@ -661,6 +673,31 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
     vector<Track> tracks = cachedTracks;
     std::unordered_set<int> activeTrackIds;
 
+    std::unordered_map<int, cv::Rect> trackBoxes720p;
+    trackBoxes720p.reserve(tracks.size());
+    for (const auto& tr : tracks) {
+        cv::Rect box((int)tr.bbox.x, (int)tr.bbox.y, (int)tr.bbox.width, (int)tr.bbox.height);
+        if (box.width > 0 && box.height > 0) {
+            trackBoxes720p.emplace(tr.id, box);
+        }
+    }
+
+    std::unordered_map<int, float> trackOcclusionRatio;
+    trackOcclusionRatio.reserve(trackBoxes720p.size());
+    for (const auto& kv_a : trackBoxes720p) {
+        float max_overlap = 0.0f;
+        for (const auto& kv_b : trackBoxes720p) {
+            if (kv_a.first == kv_b.first) {
+                continue;
+            }
+            float overlap = rect_overlap_ratio_on_a(kv_a.second, kv_b.second);
+            if (overlap > max_overlap) {
+                max_overlap = overlap;
+            }
+        }
+        trackOcclusionRatio[kv_a.first] = max_overlap;
+    }
+
     for (auto& t : tracks) {
         activeTrackIds.insert(t.id);
 
@@ -731,6 +768,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             continue;
         }
 
+        float person_occlusion = 0.0f;
+        auto occ_it = trackOcclusionRatio.find(t.id);
+        if (occ_it != trackOcclusionRatio.end()) {
+            person_occlusion = occ_it->second;
+        }
+        if (person_occlusion > CAPTURE_MAX_PERSON_OCCLUSION) {
+            continue;
+        }
+
         int& skip_counter = trackFaceDetectSkipCounters[t.id];
         skip_counter = (skip_counter + 1) % CAPTURE_FACE_DETECT_INTERVAL;
         if (skip_counter != 0) {
@@ -791,6 +837,24 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         base_fbox.width = std::min(base_fbox.width, person_roi.cols - base_fbox.x);
         base_fbox.height = std::min(base_fbox.height, person_roi.rows - base_fbox.y);
         if (base_fbox.width <= 0 || base_fbox.height <= 0) {
+            continue;
+        }
+
+        float margin_left = static_cast<float>(base_fbox.x);
+        float margin_right = static_cast<float>(person_roi.cols - (base_fbox.x + base_fbox.width));
+        float margin_top = static_cast<float>(base_fbox.y);
+        float margin_bottom = static_cast<float>(person_roi.rows - (base_fbox.y + base_fbox.height));
+        float margin_x_ratio = std::min(margin_left, margin_right) / std::max(1, base_fbox.width);
+        float margin_y_ratio = std::min(margin_top, margin_bottom) / std::max(1, base_fbox.height);
+        float min_margin_ratio = std::min(margin_x_ratio, margin_y_ratio);
+
+        float face_edge_occlusion = 0.0f;
+        if (min_margin_ratio < CAPTURE_FACE_EDGE_MIN_MARGIN) {
+            face_edge_occlusion =
+                (CAPTURE_FACE_EDGE_MIN_MARGIN - min_margin_ratio) / CAPTURE_FACE_EDGE_MIN_MARGIN;
+            face_edge_occlusion = std::max(0.0f, std::min(1.0f, face_edge_occlusion));
+        }
+        if (face_edge_occlusion > CAPTURE_MAX_FACE_EDGE_OCCLUSION) {
             continue;
         }
 
@@ -856,7 +920,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
 
         float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
         float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-        double current_score = current_clarity * quality_weight + area_score * 1000 * area_weight;
+        float occlusion_penalty = person_occlusion * 0.7f + face_edge_occlusion * 0.3f;
+        double current_score = current_clarity * quality_weight +
+                       area_score * 1000 * area_weight -
+                       occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY;
 
         Track::FrameData frame_data;
         frame_data.score = current_score;
@@ -867,6 +934,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         frame_data.yaw_abs = yaw;
         frame_data.clarity = current_clarity;
         frame_data.area_ratio = area_ratio;
+        frame_data.person_occlusion = person_occlusion;
+        frame_data.face_edge_occlusion = face_edge_occlusion;
         add_frame_candidate(t.id, frame_data);
     }
 
