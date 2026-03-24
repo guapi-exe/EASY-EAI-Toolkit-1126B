@@ -25,4 +25,5 @@ private:
     int inputChannels{3};
     rknn_tensor_format inputFmt{RKNN_TENSOR_NHWC};
     rknn_tensor_format outputFmt{RKNN_TENSOR_NHWC};
+    rknn_tensor_type inputType{RKNN_TENSOR_FLOAT32};
 };

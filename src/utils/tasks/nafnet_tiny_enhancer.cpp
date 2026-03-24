@@ -74,6 +74,44 @@ void infer_tensor_shape(const rknn_tensor_attr& attr,
         }
     }
 }
+
+bool is_float_tensor(rknn_tensor_type type) {
+    return type == RKNN_TENSOR_FLOAT32 || type == RKNN_TENSOR_FLOAT16;
+}
+
+void pack_nchw_float(const cv::Mat& rgb_float, std::vector<float>* output) {
+    const int height = rgb_float.rows;
+    const int width = rgb_float.cols;
+    output->assign(static_cast<size_t>(height * width * 3), 0.0f);
+
+    const int plane = height * width;
+    for (int y = 0; y < height; ++y) {
+        const cv::Vec3f* row = rgb_float.ptr<cv::Vec3f>(y);
+        for (int x = 0; x < width; ++x) {
+            const int idx = y * width + x;
+            (*output)[idx] = row[x][0];
+            (*output)[plane + idx] = row[x][1];
+            (*output)[plane * 2 + idx] = row[x][2];
+        }
+    }
+}
+
+void pack_nchw_u8(const cv::Mat& rgb_u8, std::vector<unsigned char>* output) {
+    const int height = rgb_u8.rows;
+    const int width = rgb_u8.cols;
+    output->assign(static_cast<size_t>(height * width * 3), 0);
+
+    const int plane = height * width;
+    for (int y = 0; y < height; ++y) {
+        const cv::Vec3b* row = rgb_u8.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < width; ++x) {
+            const int idx = y * width + x;
+            (*output)[idx] = row[x][0];
+            (*output)[plane + idx] = row[x][1];
+            (*output)[plane * 2 + idx] = row[x][2];
+        }
+    }
+}
 }
 
 NAFNetTinyEnhancer::NAFNetTinyEnhancer(const std::string& modelPath)
@@ -131,6 +169,7 @@ bool NAFNetTinyEnhancer::init() {
     }
 
     infer_tensor_shape(input_attr, &inputHeight, &inputWidth, &inputChannels, &inputFmt);
+    inputType = input_attr.type;
     if (inputWidth <= 0 || inputHeight <= 0 || inputChannels != 3) {
         log_error("NAFNetTinyEnhancer: unsupported input shape h=%d w=%d c=%d", inputHeight, inputWidth, inputChannels);
         release();
@@ -149,7 +188,15 @@ bool NAFNetTinyEnhancer::init() {
     outputFmt = output_attr.fmt;
 
     ready = true;
-    log_info("NAFNetTinyEnhancer: loaded %s input=%dx%dx%d", modelPath.c_str(), inputWidth, inputHeight, inputChannels);
+    log_info(
+        "NAFNetTinyEnhancer: loaded %s input=%dx%dx%d input_fmt=%d input_type=%d output_fmt=%d",
+        modelPath.c_str(),
+        inputWidth,
+        inputHeight,
+        inputChannels,
+        static_cast<int>(inputFmt),
+        static_cast<int>(inputType),
+        static_cast<int>(outputFmt));
     return true;
 }
 
@@ -176,13 +223,49 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
     cv::Mat rgb;
     cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
 
+    std::vector<float> float_input_buffer;
+    std::vector<unsigned char> u8_input_buffer;
+    void* input_buf = nullptr;
+    size_t input_size = 0;
+    rknn_tensor_type feed_type = inputType;
+    rknn_tensor_format feed_fmt = inputFmt == RKNN_TENSOR_UNDEFINED ? RKNN_TENSOR_NHWC : inputFmt;
+
+    if (is_float_tensor(inputType)) {
+        cv::Mat rgb_float;
+        rgb.convertTo(rgb_float, CV_32FC3, 1.0 / 255.0);
+
+        if (feed_fmt == RKNN_TENSOR_NCHW) {
+            pack_nchw_float(rgb_float, &float_input_buffer);
+            input_buf = float_input_buffer.data();
+        } else {
+            if (!rgb_float.isContinuous()) {
+                rgb_float = rgb_float.clone();
+            }
+            input_buf = rgb_float.data;
+        }
+
+        input_size = static_cast<size_t>(inputWidth * inputHeight * inputChannels * sizeof(float));
+        feed_type = RKNN_TENSOR_FLOAT32;
+    } else {
+        if (feed_fmt == RKNN_TENSOR_NCHW) {
+            pack_nchw_u8(rgb, &u8_input_buffer);
+            input_buf = u8_input_buffer.data();
+        } else {
+            input_buf = rgb.data;
+        }
+
+        input_size = static_cast<size_t>(inputWidth * inputHeight * inputChannels);
+        feed_type = RKNN_TENSOR_UINT8;
+    }
+
     rknn_input inputs[1];
     std::memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
-    inputs[0].type = RKNN_TENSOR_UINT8;
-    inputs[0].size = inputWidth * inputHeight * inputChannels;
-    inputs[0].fmt = RKNN_TENSOR_NHWC;
-    inputs[0].buf = rgb.data;
+    inputs[0].type = feed_type;
+    inputs[0].size = input_size;
+    inputs[0].fmt = feed_fmt;
+    inputs[0].buf = input_buf;
+    inputs[0].pass_through = 0;
 
     int ret = rknn_inputs_set(ctx, 1, inputs);
     if (ret < 0) {
@@ -219,7 +302,6 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
 
     cv::Mat output_rgb(out_h, out_w, CV_32FC3);
     const float* out_ptr = static_cast<const float*>(outputs[0].buf);
-    double min_val = 1e12;
     double max_val = -1e12;
     int plane = out_h * out_w;
 
@@ -231,7 +313,6 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
                 row[x][0] = out_ptr[idx];
                 row[x][1] = out_ptr[plane + idx];
                 row[x][2] = out_ptr[plane * 2 + idx];
-                min_val = std::min(min_val, static_cast<double>(std::min(row[x][0], std::min(row[x][1], row[x][2]))));
                 max_val = std::max(max_val, static_cast<double>(std::max(row[x][0], std::max(row[x][1], row[x][2]))));
             }
         }
@@ -243,7 +324,6 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
                 row[x][0] = out_ptr[idx];
                 row[x][1] = out_ptr[idx + 1];
                 row[x][2] = out_ptr[idx + 2];
-                min_val = std::min(min_val, static_cast<double>(std::min(row[x][0], std::min(row[x][1], row[x][2]))));
                 max_val = std::max(max_val, static_cast<double>(std::max(row[x][0], std::max(row[x][1], row[x][2]))));
             }
         }
@@ -252,10 +332,12 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
     rknn_outputs_release(ctx, 1, outputs);
 
     if (max_val <= 1.5) {
+        cv::max(output_rgb, 0.0, output_rgb);
+        cv::min(output_rgb, 1.0, output_rgb);
         output_rgb *= 255.0f;
-    }
-    if (min_val < 0.0) {
-        output_rgb += static_cast<float>(-min_val);
+    } else {
+        cv::max(output_rgb, 0.0, output_rgb);
+        cv::min(output_rgb, 255.0, output_rgb);
     }
 
     cv::Mat output_u8;
