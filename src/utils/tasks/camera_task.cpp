@@ -4,6 +4,7 @@
 #include "face_detect.h"
 #include "sort_tracker.h"
 #include <fstream>
+#include <cstdio>
 extern "C" {
 #include "log.h"
 #include "camera.h"
@@ -28,6 +29,7 @@ static std::chrono::steady_clock::time_point g_lastIrCutSwitchTime =
 constexpr int kIrCutMinSwitchIntervalSec = 60;
 constexpr int kIrCutConsecutiveHits = 3;
 constexpr int kIrCutSettleAfterSwitchSec = 8;
+constexpr int kRejectLogThrottleMs = 1500;
 
 double updateFilteredBrightness(double prev, double raw) {
     if (prev < 0.0) {
@@ -262,6 +264,41 @@ void CameraTask::setPersonEventCallback(PersonEventCallback cb) {
     personEventCallback = cb;
 }
 
+void CameraTask::logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail) {
+    auto now = std::chrono::steady_clock::now();
+    std::string key = std::string(stage) + ":" + std::to_string(trackId);
+
+    std::lock_guard<std::mutex> lock(rejectLogMutex);
+    auto& state = rejectLogStates[key];
+
+    bool has_prev_log = state.lastLogTime.time_since_epoch().count() != 0;
+    bool same_reason = state.reason == reason;
+    bool within_throttle = has_prev_log &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - state.lastLogTime).count() < kRejectLogThrottleMs;
+
+    if (same_reason && within_throttle) {
+        state.suppressedCount++;
+        return;
+    }
+
+    char suffix[64] = {0};
+    if (state.suppressedCount > 0) {
+        std::snprintf(suffix, sizeof(suffix), " suppressed=%d", state.suppressedCount);
+    }
+
+    state.reason = reason;
+    state.suppressedCount = 0;
+    state.lastLogTime = now;
+
+    log_debug("Track %d %s reject[%s]: %s%s", trackId, stage, reason, detail.c_str(), suffix);
+}
+
+void CameraTask::clearTrackReject(const char* stage, int trackId) {
+    std::string key = std::string(stage) + ":" + std::to_string(trackId);
+    std::lock_guard<std::mutex> lock(rejectLogMutex);
+    rejectLogStates.erase(key);
+}
+
 // -------------------- 图像清晰度计算 --------------------
 double CameraTask::computeFocusMeasure(const Mat& img) {
     if (img.empty() || img.cols <= 0 || img.rows <= 0) {
@@ -356,6 +393,12 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
     std::lock_guard<std::mutex> lock(candidateEvalMutex);
     int pending_for_track = pendingCandidateEvalByTrack[job.trackId];
     if (pending_for_track >= CAPTURE_CANDIDATE_PER_TRACK_MAX_PENDING) {
+        char detail[192];
+        std::snprintf(detail, sizeof(detail), "pending=%d max=%d queue=%zu",
+                      pending_for_track,
+                      CAPTURE_CANDIDATE_PER_TRACK_MAX_PENDING,
+                      candidateEvalQueue.size());
+        logTrackReject("queue", job.trackId, "pending_limit", detail);
         return false;
     }
 
@@ -408,6 +451,11 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
         }
 
         if (drop_index == candidateEvalQueue.size()) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "queue=%zu pending=%d no_replace_slot",
+                          candidateEvalQueue.size(),
+                          pending_for_track);
+            logTrackReject("queue", job.trackId, "queue_full", detail);
             return false;
         }
 
@@ -416,6 +464,7 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
 
     pendingCandidateEvalByTrack[job.trackId] = pending_for_track + 1;
     candidateEvalQueue.push_back(std::move(job));
+    clearTrackReject("queue", candidateEvalQueue.back().trackId);
     candidateEvalCv.notify_one();
     return true;
 }
@@ -450,7 +499,16 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
 
                 std::vector<det> face_result;
                 int num_faces = face_detect_run(faceCtx, person_roi_resized, face_result);
-                if (num_faces > 0 && !face_result.empty()) {
+                if (num_faces <= 0 || face_result.empty()) {
+                    char detail[192];
+                    std::snprintf(detail, sizeof(detail), "faces=%d roi=%dx%d area=%.4f motion=%.4f",
+                                  num_faces,
+                                  job.personRoi.cols,
+                                  job.personRoi.rows,
+                                  job.areaRatio,
+                                  job.motionRatio);
+                    logTrackReject("eval", job.trackId, "no_face_detected", detail);
+                } else {
                     int best_idx = 0;
                     for (int i = 1; i < num_faces; ++i) {
                         if (face_result[i].score > face_result[best_idx].score) {
@@ -620,6 +678,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     frame_data.face_edge_occlusion = face_edge_occlusion;
                                                     frame_data.motion_ratio = job.motionRatio;
                                                     add_frame_candidate(job.trackId, frame_data);
+                                                    clearTrackReject("eval", job.trackId);
 
                                                     if (!strong_candidate_ok) {
                                                         log_debug("Track %d 添加兜底候选帧: clarity=%.1f yaw=%.2f occ=%.2f",
@@ -628,13 +687,80 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                                   yaw,
                                                                   face_edge_occlusion);
                                                     }
+                                                } else {
+                                                    char detail[224];
+                                                    std::snprintf(detail, sizeof(detail),
+                                                                  "crop_margin=%.2f need=%.2f yaw=%.2f clarity=%.1f",
+                                                                  crop_min_margin,
+                                                                  required_crop_margin,
+                                                                  yaw,
+                                                                  current_clarity);
+                                                    logTrackReject("eval", job.trackId, "headshot_margin", detail);
                                                 }
+                                            } else {
+                                                char detail[160];
+                                                std::snprintf(detail, sizeof(detail), "invalid_headshot_box=%dx%d", fbox.width, fbox.height);
+                                                logTrackReject("eval", job.trackId, "headshot_box_invalid", detail);
                                             }
+                                        } else {
+                                            char detail[256];
+                                            std::snprintf(detail, sizeof(detail),
+                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f",
+                                                          frontal_ok ? 1 : 0,
+                                                          frontal_relaxed_ok ? 1 : 0,
+                                                          weak_frontal_ok ? 1 : 0,
+                                                          yaw,
+                                                          current_clarity,
+                                                          face_edge_occlusion);
+                                            const char* reason = "quality_gate";
+                                            if (CAPTURE_REQUIRE_FRONTAL_FACE && !weak_frontal_ok) {
+                                                reason = "non_frontal";
+                                            } else if (current_clarity <= CAPTURE_FALLBACK_MIN_CLARITY) {
+                                                reason = "clarity_low";
+                                            } else if (yaw >= CAPTURE_FALLBACK_MAX_YAW) {
+                                                reason = "yaw_large";
+                                            } else if (face_edge_occlusion >= CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION) {
+                                                reason = "edge_occlusion";
+                                            }
+                                            logTrackReject("eval", job.trackId, reason, detail);
                                         }
+                                    } else {
+                                        char detail[160];
+                                        std::snprintf(detail, sizeof(detail), "eye_dx=%.5f", dx);
+                                        logTrackReject("eval", job.trackId, "eye_distance_small", detail);
                                     }
+                                } else {
+                                    char detail[224];
+                                    std::snprintf(detail, sizeof(detail),
+                                                  "area_ratio=%.3f width_ratio=%.3f center_y=%.3f",
+                                                  face_area_ratio,
+                                                  face_width_ratio,
+                                                  face_center_y_ratio);
+                                    logTrackReject("eval", job.trackId, "face_geometry", detail);
                                 }
+                            } else {
+                                char detail[224];
+                                std::snprintf(detail, sizeof(detail), "short=%d min_short=%d area=%d min_area=%d",
+                                              face_short_side,
+                                              CAPTURE_MIN_FACE_BOX_SHORT_SIDE,
+                                              face_area,
+                                              CAPTURE_MIN_FACE_BOX_AREA);
+                                logTrackReject("eval", job.trackId, "face_box_small", detail);
                             }
+                        } else {
+                            char detail[160];
+                            std::snprintf(detail, sizeof(detail), "base_fbox=%dx%d", base_fbox.width, base_fbox.height);
+                            logTrackReject("eval", job.trackId, "face_box_invalid", detail);
                         }
+                    } else {
+                        char detail[192];
+                        std::snprintf(detail, sizeof(detail), "score=%.2f min=%.2f landmarks=%zu",
+                                      best_face.score,
+                                      CAPTURE_MIN_FACE_SCORE,
+                                      best_face.landmarks.size());
+                        logTrackReject("eval", job.trackId,
+                                       best_face.landmarks.size() < 3 ? "landmarks_missing" : "face_score_low",
+                                       detail);
                     }
                 }
             }
@@ -1057,6 +1183,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         lastTrackCenters[t.id] = curr_center_720p;
 
         if (t.hits < CAPTURE_MIN_TRACK_HITS) {
+            char detail[160];
+            std::snprintf(detail, sizeof(detail), "hits=%d min_hits=%d", t.hits, CAPTURE_MIN_TRACK_HITS);
+            logTrackReject("gate", t.id, "track_unstable", detail);
             continue;
         }
 
@@ -1111,13 +1240,45 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
 
         bool near_ok = area_ratio >= CAPTURE_NEAR_AREA_RATIO;
         bool approach_ok = t.is_approaching || near_ok || (CAPTURE_REQUIRE_APPROACH == 0);
-        if (t.has_captured || !approach_ok) {
+        if (t.has_captured) {
+            logTrackReject("gate", t.id, "already_captured", "track already captured");
+            continue;
+        }
+        if (!approach_ok) {
+            char detail[224];
+            std::snprintf(detail, sizeof(detail), "approaching=%d near=%d trend=%.3f area=%.4f",
+                          t.is_approaching ? 1 : 0,
+                          near_ok ? 1 : 0,
+                          area_trend_ratio,
+                          area_ratio);
+            logTrackReject("gate", t.id, "not_approaching", detail);
             continue;
         }
         if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG && !near_ok) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "trend=%.3f near=%d area=%.4f",
+                          area_trend_ratio,
+                          near_ok ? 1 : 0,
+                          area_ratio);
+            logTrackReject("gate", t.id, "moving_away", detail);
             continue;
         }
-        if (area_ratio <= CAPTURE_MIN_AREA_RATIO || motion_ratio > CAPTURE_MAX_MOTION_REJECT_RATIO) {
+        if (area_ratio <= CAPTURE_MIN_AREA_RATIO) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "area=%.4f min=%.4f near=%.4f",
+                          area_ratio,
+                          CAPTURE_MIN_AREA_RATIO,
+                          CAPTURE_NEAR_AREA_RATIO);
+            logTrackReject("gate", t.id, "too_far", detail);
+            continue;
+        }
+        if (motion_ratio > CAPTURE_MAX_MOTION_REJECT_RATIO) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f",
+                          motion_ratio,
+                          CAPTURE_MAX_MOTION_REJECT_RATIO,
+                          area_ratio);
+            logTrackReject("gate", t.id, "motion_large", detail);
             continue;
         }
 
@@ -1130,6 +1291,13 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         Mat person_roi = frame(bbox_4k);
 
         if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "roi=%dx%d bbox4k=%dx%d",
+                          person_roi.cols,
+                          person_roi.rows,
+                          bbox_4k.width,
+                          bbox_4k.height);
+            logTrackReject("gate", t.id, "person_roi_invalid", detail);
             continue;
         }
         CandidateEvalJob job;
@@ -1138,7 +1306,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         job.areaRatio = area_ratio;
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;
-        enqueueCandidateEvaluation(std::move(job));
+        if (enqueueCandidateEvaluation(std::move(job))) {
+            clearTrackReject("gate", t.id);
+        }
     }
 
     if (track_count > 0) {

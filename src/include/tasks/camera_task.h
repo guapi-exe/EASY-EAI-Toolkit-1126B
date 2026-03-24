@@ -54,6 +54,8 @@ private:
     double computeFocusMeasure(const cv::Mat& img);
     bool isFrontalFace(const std::vector<cv::Point2f>& landmarks);
     bool isSideFace(const std::vector<cv::Point2f>& landmarks);
+    void logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail);
+    void clearTrackReject(const char* stage, int trackId);
     void processFrame(const cv::Mat& frame, rknn_context personCtx);
     void updateFPS(); // 更新FPS计算
     
@@ -79,6 +81,14 @@ private:
     std::condition_variable candidateEvalCv;
     std::deque<CandidateEvalJob> candidateEvalQueue;
     std::unordered_map<int, int> pendingCandidateEvalByTrack;
+
+    struct RejectLogState {
+        std::string reason;
+        int suppressedCount{0};
+        std::chrono::steady_clock::time_point lastLogTime{};
+    };
+    std::mutex rejectLogMutex;
+    std::unordered_map<std::string, RejectLogState> rejectLogStates;
 
     std::unordered_set<int> capturedPersonIds;
     std::unordered_set<int> capturedFaceIds;
