@@ -257,15 +257,74 @@ cv::Mat opencv_super_resolve_face(const cv::Mat& face) {
     return sr;
 }
 
+double compute_gradient_energy_bgr(const cv::Mat& img) {
+    if (img.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat gray;
+    if (img.channels() == 3) {
+        cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = img;
+    }
+
+    cv::Mat gx, gy;
+    cv::Sobel(gray, gx, CV_32F, 1, 0, 3);
+    cv::Sobel(gray, gy, CV_32F, 0, 1, 3);
+    cv::Mat magnitude;
+    cv::magnitude(gx, gy, magnitude);
+    return cv::mean(magnitude)[0];
+}
+
+double compute_ghost_penalty_bgr(const cv::Mat& img) {
+    if (img.empty()) {
+        return 0.0;
+    }
+
+    cv::Mat gray;
+    if (img.channels() == 3) {
+        cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = img;
+    }
+
+    double angle = estimate_blur_angle_deg(gray);
+    int dx = static_cast<int>(std::round(std::cos(angle * CV_PI / 180.0) * 2.0));
+    int dy = static_cast<int>(std::round(std::sin(angle * CV_PI / 180.0) * 2.0));
+    if (dx == 0 && dy == 0) {
+        dx = 1;
+    }
+
+    cv::Mat shifted;
+    cv::Mat transform = (cv::Mat_<double>(2, 3) << 1, 0, dx, 0, 1, dy);
+    cv::warpAffine(gray, shifted, transform, gray.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+
+    cv::Mat diff;
+    cv::absdiff(gray, shifted, diff);
+    double shift_diff = cv::mean(diff)[0];
+    double penalty = std::max(0.0, 18.0 - shift_diff) * 2.2;
+
+    double lap_var = compute_laplacian_variance(gray);
+    if (lap_var > 160.0) {
+        penalty *= 0.72;
+    }
+    return penalty;
+}
+
 double score_face_candidate(const cv::Mat& candidate,
                             double base_focus,
                             double base_luma,
+                            double base_gradient,
                             double scale_bonus = 0.0) {
     double focus = compute_focus_measure_bgr(candidate);
     double luma = compute_luma_mean_bgr(candidate);
+    double gradient = compute_gradient_energy_bgr(candidate);
+    double ghost_penalty = compute_ghost_penalty_bgr(candidate);
     double luma_penalty = std::fabs(luma - base_luma) * 1.8;
     double oversoften_penalty = std::max(0.0, base_focus * 0.90 - focus) * 0.9;
-    return focus - luma_penalty - oversoften_penalty + scale_bonus;
+    double gradient_bonus = std::max(0.0, gradient - base_gradient * 0.92) * 0.32;
+    return focus + gradient_bonus - luma_penalty - oversoften_penalty - ghost_penalty + scale_bonus;
 }
 
 cv::Mat upscale_small_face(const cv::Mat& face) {
@@ -532,6 +591,50 @@ cv::Mat opencv_superres_deblur_face(const cv::Mat& face) {
     return final_face;
 }
 
+cv::Mat deghost_motion_face(const cv::Mat& face) {
+    if (face.empty()) {
+        return face.clone();
+    }
+
+    cv::Mat work = upscale_small_face(face);
+    cv::Mat gray;
+    cv::cvtColor(work, gray, cv::COLOR_BGR2GRAY);
+    double focus = compute_laplacian_variance(gray);
+    double angle = estimate_blur_angle_deg(gray);
+    float severity = static_cast<float>(std::max(0.0, std::min(1.0, (235.0 - focus) / 235.0)));
+
+    cv::Mat restored = apply_motion_wiener_restore_bgr(work, angle, severity > 0.65f ? 17 : 13, 4.6f);
+    if (severity > 0.45f) {
+        restored = apply_motion_wiener_restore_bgr(restored, angle, severity > 0.72f ? 13 : 11, 5.2f);
+    }
+
+    cv::Mat directional = apply_directional_unsharp(restored, angle, severity > 0.55f ? 9 : 7, 0.05f + 0.04f * severity);
+    cv::Mat blended;
+    cv::addWeighted(restored, 0.76, directional, 0.24, 0, blended);
+
+    cv::Mat denoised;
+    cv::bilateralFilter(blended, denoised, 5, 20, 10);
+    denoised = compress_face_highlights(denoised);
+    denoised = suppress_halo_artifacts(work, denoised);
+
+    cv::Mat final_face;
+    cv::addWeighted(denoised, 0.86, work, 0.14, 0, final_face);
+    return final_face;
+}
+
+cv::Mat opencv_aggressive_deghost_face(const cv::Mat& face) {
+    if (face.empty()) {
+        return face.clone();
+    }
+
+    cv::Mat sr = opencv_super_resolve_face(face);
+    cv::Mat deghosted = deghost_motion_face(sr);
+    cv::Mat final_face = motion_deblur_enhance_face(deghosted);
+    final_face = compress_face_highlights(final_face);
+    final_face = suppress_halo_artifacts(sr, final_face);
+    return final_face;
+}
+
 cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
     if (person.empty() || person.cols <= 0 || person.rows <= 0) {
         return person;
@@ -712,12 +815,15 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
         cv::Mat classic_face = motion_deblur_enhance_face(img);
         cv::Mat sr_face = opencv_super_resolve_face(img);
         cv::Mat sr_deblur_face = opencv_superres_deblur_face(img);
+        cv::Mat deghost_face = opencv_aggressive_deghost_face(img);
 
         double base_focus = compute_focus_measure_bgr(img);
         double base_luma = compute_luma_mean_bgr(img);
-        double classic_score = score_face_candidate(classic_face, base_focus, base_luma, 8.0);
-        double sr_score = score_face_candidate(sr_face, base_focus, base_luma, 18.0);
-        double sr_deblur_score = score_face_candidate(sr_deblur_face, base_focus, base_luma, 24.0);
+        double base_gradient = compute_gradient_energy_bgr(img);
+        double classic_score = score_face_candidate(classic_face, base_focus, base_luma, base_gradient, 8.0);
+        double sr_score = score_face_candidate(sr_face, base_focus, base_luma, base_gradient, 18.0);
+        double sr_deblur_score = score_face_candidate(sr_deblur_face, base_focus, base_luma, base_gradient, 24.0);
+        double deghost_score = score_face_candidate(deghost_face, base_focus, base_luma, base_gradient, 28.0);
 
         processed = classic_face;
         const char* best_mode = "classic";
@@ -733,12 +839,18 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
             best_score = sr_deblur_score;
             best_mode = "opencv_sr_deblur";
         }
+        if (deghost_score > best_score) {
+            processed = deghost_face;
+            best_score = deghost_score;
+            best_mode = "opencv_deghost";
+        }
 
-        log_debug("UploaderTask: OpenCV face compare base=%.1f classic=%.1f sr=%.1f sr_deblur=%.1f use=%s",
+        log_debug("UploaderTask: OpenCV face compare base=%.1f classic=%.1f sr=%.1f sr_deblur=%.1f deghost=%.1f use=%s",
                   base_focus,
                   classic_score,
                   sr_score,
                   sr_deblur_score,
+                  deghost_score,
                   best_mode);
     } else if (type == "person") {
         processed = motion_deblur_enhance_person(img);

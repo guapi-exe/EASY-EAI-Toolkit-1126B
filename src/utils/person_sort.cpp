@@ -202,14 +202,16 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
         }
 
         float frame_occlusion = occlusion_of(frame);
+        bool clearly_lower_motion = frame.motion_ratio < best_motion - 0.003f;
+        bool similar_motion = std::fabs(frame.motion_ratio - best_motion) <= 0.003f;
 
         if (frame.is_frontal) {
             if (!found_frontal ||
-                frame_occlusion < best_occlusion - 0.02f ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.motion_ratio < best_motion - 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && frame.clarity > best_clarity + 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.yaw_abs < best_yaw - 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
+                clearly_lower_motion ||
+                (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
+                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
+                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.yaw_abs < best_yaw - 1e-6f) ||
+                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
                 found_frontal = true;
                 best_occlusion = frame_occlusion;
                 best_motion = frame.motion_ratio;
@@ -220,10 +222,10 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
             }
         } else if (!found_frontal) {
             if (best_index == SIZE_MAX ||
-                frame_occlusion < best_occlusion - 0.02f ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.motion_ratio < best_motion - 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && frame.clarity > best_clarity + 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.score > best_score)) {
+                clearly_lower_motion ||
+                (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
+                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
+                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.score > best_score)) {
                 best_occlusion = frame_occlusion;
                 best_motion = frame.motion_ratio;
                 best_clarity = frame.clarity;
