@@ -11,6 +11,7 @@
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
+#include <deque>
 
 class CameraTask {
 public:
@@ -38,12 +39,22 @@ public:
     void resetFrameCount() { totalFrames = 0; }
 
 private:
+    struct CandidateEvalJob {
+        int trackId;
+        cv::Mat personRoi;
+        float areaRatio;
+        float personOcclusion;
+        float motionRatio;
+    };
+
     void run();
     void captureLoop();
+    void candidateEvalLoop(rknn_context faceCtx);
+    bool enqueueCandidateEvaluation(CandidateEvalJob job);
     double computeFocusMeasure(const cv::Mat& img);
     bool isFrontalFace(const std::vector<cv::Point2f>& landmarks);
     bool isSideFace(const std::vector<cv::Point2f>& landmarks);
-    void processFrame(const cv::Mat& frame, rknn_context personCtx, rknn_context faceCtx);
+    void processFrame(const cv::Mat& frame, rknn_context personCtx);
     void updateFPS(); // 更新FPS计算
     
     std::string personModelPath;
@@ -52,6 +63,7 @@ private:
 
     std::thread worker;
     std::thread captureWorker;
+    std::thread candidateWorker;
     std::atomic<bool> running;
     std::atomic<bool> cameraOpened{false};
     UploadCallback uploadCallback;
@@ -62,6 +74,11 @@ private:
     cv::Mat latestFrame;
     uint64_t latestFrameSeq{0};
     uint64_t consumedFrameSeq{0};
+
+    std::mutex candidateEvalMutex;
+    std::condition_variable candidateEvalCv;
+    std::deque<CandidateEvalJob> candidateEvalQueue;
+    std::unordered_map<int, int> pendingCandidateEvalByTrack;
 
     std::unordered_set<int> capturedPersonIds;
     std::unordered_set<int> capturedFaceIds;
@@ -79,8 +96,6 @@ private:
     // 运动稳定性：记录每个track上一次中心点（720p坐标）
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
 
-    // 人脸检测降频：每个track独立计数
-    std::unordered_map<int, int> trackFaceDetectSkipCounters;
     std::unordered_set<int> reportedPersonIds;
     std::atomic<double> environmentBrightness{0.0};
     std::atomic<double> brightnessBlackThreshold{CAMERA_BRIGHTNESS_BLACK_THRESHOLD};

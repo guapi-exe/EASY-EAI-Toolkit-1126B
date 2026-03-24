@@ -48,6 +48,7 @@ struct Track {
         float area_ratio;
         float person_occlusion;
         float face_edge_occlusion;
+        float motion_ratio;
     };
     std::vector<FrameData> frame_candidates; // 候选帧数据
 };

@@ -230,6 +230,69 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
 
     return out;
 }
+
+cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
+    if (person.empty() || person.cols <= 0 || person.rows <= 0) {
+        return person;
+    }
+
+    cv::Mat work = person;
+    int long_edge = std::max(work.cols, work.rows);
+    if (long_edge > 1440) {
+        work = resize_to_long_edge(work, 1440, cv::INTER_AREA);
+    }
+
+    cv::Mat gray_in;
+    cv::cvtColor(work, gray_in, cv::COLOR_BGR2GRAY);
+    double mean_luma_before = cv::mean(gray_in)[0];
+    double lap_var = compute_laplacian_variance(gray_in);
+    float blur_severity = static_cast<float>(std::max(0.0, std::min(1.0, (180.0 - lap_var) / 180.0)));
+    if (blur_severity < 0.18f && mean_luma_before >= 95.0) {
+        return work.clone();
+    }
+
+    cv::Mat work_f;
+    work.convertTo(work_f, CV_32FC3);
+    cv::Mat base_f;
+    cv::GaussianBlur(work_f, base_f, cv::Size(0, 0), 0.85 + 0.30 * blur_severity);
+    cv::Mat detail_f = work_f - base_f;
+    float detail_gain = 0.10f + 0.08f * blur_severity;
+    cv::Mat enhanced_f = work_f + detail_f * detail_gain;
+
+    if (blur_severity > 0.45f) {
+        double angle = estimate_blur_angle_deg(gray_in);
+        cv::Mat kernel = cv::getGaborKernel(cv::Size(9, 9), 2.0, angle * CV_PI / 180.0, 5.5, 0.9, 0.0, CV_32F);
+        cv::Mat directional;
+        cv::filter2D(gray_in, directional, CV_32F, kernel);
+        cv::normalize(directional, directional, -10.0f, 10.0f, cv::NORM_MINMAX);
+
+        std::vector<cv::Mat> channels;
+        cv::split(enhanced_f, channels);
+        for (auto& channel : channels) {
+            channel += directional * 0.025f;
+        }
+        cv::merge(channels, enhanced_f);
+    }
+
+    cv::Mat enhanced;
+    enhanced_f.convertTo(enhanced, CV_8UC3);
+    cv::Mat blur;
+    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.9 + 0.2 * blur_severity);
+    cv::Mat out;
+    float unsharp_amount = 0.10f + 0.06f * blur_severity;
+    cv::addWeighted(enhanced, 1.0f + unsharp_amount, blur, -unsharp_amount, 0, out);
+
+    cv::Mat gray_out;
+    cv::cvtColor(out, gray_out, cv::COLOR_BGR2GRAY);
+    double mean_luma_after = cv::mean(gray_out)[0];
+    if (mean_luma_after > 1e-3) {
+        double gain = mean_luma_before / mean_luma_after;
+        gain = std::max(0.94, std::min(1.04, gain));
+        out.convertTo(out, -1, gain, 0);
+    }
+
+    return out;
+}
 }
 
 UploaderTask::UploaderTask(const std::string& eqCode, const std::string& url) : eqCode(eqCode), serverUrl(url), running(false) {}
@@ -331,6 +394,8 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
     cv::Mat processed = img;
     if (type == "face") {
         processed = motion_deblur_enhance_face(img);
+    } else if (type == "person") {
+        processed = motion_deblur_enhance_person(img);
     }
 
     std::vector<uchar> buf = encode_image_for_upload(processed);

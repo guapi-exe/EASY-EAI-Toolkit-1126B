@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "tinyekf.h"
 #include <functional>
+#include <mutex>
 #include <unordered_set>
 extern "C" {
 #include "log.h"
@@ -13,6 +14,7 @@ extern "C" {
 
 static std::vector<Track> tracks;
 static int next_id = 1;
+static std::mutex tracks_mutex;
 
 struct PendingTrack {
     cv::Rect2f bbox;
@@ -38,6 +40,7 @@ static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
 static Track create_track(const Detection& det, int id);
 
 void sort_init() { 
+    std::unique_lock<std::mutex> lock(tracks_mutex);
     tracks.clear(); 
     lost_tracks.clear();
     pending_tracks.clear();
@@ -185,6 +188,7 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
     float best_yaw = 1e6f;
     double best_score = -1e12;
     float best_occlusion = 1e6f;
+    float best_motion = 1e6f;
 
     auto occlusion_of = [](const Track::FrameData& frame) {
         return frame.person_occlusion * 0.7f + frame.face_edge_occlusion * 0.3f;
@@ -202,18 +206,22 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
             if (!found_frontal ||
                 frame_occlusion < best_occlusion - 0.02f ||
                 (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.yaw_abs < best_yaw - 1e-6f) ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.motion_ratio < best_motion - 1e-6f) ||
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && frame.score > best_score)) {
                 found_frontal = true;
                 best_occlusion = frame_occlusion;
                 best_yaw = frame.yaw_abs;
+                best_motion = frame.motion_ratio;
                 best_score = frame.score;
                 best_index = i;
             }
         } else if (!found_frontal) {
             if (best_index == SIZE_MAX ||
                 frame_occlusion < best_occlusion - 0.02f ||
-                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.score > best_score)) {
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.motion_ratio < best_motion - 1e-6f) ||
+                (std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.motion_ratio - best_motion) <= 1e-6f && frame.score > best_score)) {
                 best_occlusion = frame_occlusion;
+                best_motion = frame.motion_ratio;
                 best_score = frame.score;
                 best_index = i;
             }
@@ -434,6 +442,16 @@ static Track create_track(const Detection& det, int id) {
 //-----------------主更新函数-----------------
 
 std::vector<Track> sort_update(const std::vector<Detection>& dets) {
+    struct PendingUpload {
+        int trackId;
+        Track::FrameData bestFrame;
+        float occlusion;
+    };
+
+    std::vector<PendingUpload> pendingUploads;
+    std::vector<Track> snapshot;
+
+    std::unique_lock<std::mutex> lock(tracks_mutex);
     age_lost_tracks();
     age_pending_tracks();
 
@@ -460,7 +478,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     
     if (M == 0) {
         auto it = std::remove_if(tracks.begin(), tracks.end(),
-                    [](const Track& t){
+                    [&](const Track& t){
                         if(t.missed > MAX_MISSED){
                             cache_lost_track(t);
                             
@@ -472,11 +490,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                                 size_t best_index = select_best_frame_index(t.frame_candidates);
                                 if (best_index != SIZE_MAX) {
                                     const auto& best_frame = t.frame_candidates[best_index];
-                                    upload_callback(best_frame.person_roi, t.id, "person");
-                                    upload_callback(best_frame.face_roi, t.id, "face");
                                     float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
-                                    log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 综合评分: %.2f)",
-                                             t.id, best_frame.clarity, best_frame.area_ratio*100, occ, best_frame.score);
+                                    pendingUploads.push_back({t.id, best_frame, occ});
                                     
                                     captured_person_ids->insert(t.id);
                                     captured_face_ids->insert(t.id);
@@ -490,7 +505,20 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                         return false;
                     });
         tracks.erase(it, tracks.end());
-        return tracks;
+        snapshot = tracks;
+        lock.unlock();
+        for (const auto& upload : pendingUploads) {
+            upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
+            upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
+            log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 综合评分: %.2f)",
+                     upload.trackId,
+                     upload.bestFrame.clarity,
+                     upload.bestFrame.area_ratio * 100,
+                     upload.occlusion,
+                     upload.bestFrame.motion_ratio,
+                     upload.bestFrame.score);
+        }
+        return snapshot;
     }
 
     // 计算代价矩阵
@@ -571,7 +599,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     
     // 删除长期丢失的tracks，但在删除前先处理上传
     auto it = std::remove_if(tracks.begin(), tracks.end(),
-                [](const Track& t){
+                [&](const Track& t){
                     if(t.missed > MAX_MISSED){
                         cache_lost_track(t);
                         
@@ -583,11 +611,8 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                             size_t best_index = select_best_frame_index(t.frame_candidates);
                             if (best_index != SIZE_MAX) {
                                 const auto& best_frame = t.frame_candidates[best_index];
-                                upload_callback(best_frame.person_roi, t.id, "person");
-                                upload_callback(best_frame.face_roi, t.id, "face");
                                 float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
-                                log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 综合评分: %.2f)",
-                                         t.id, best_frame.clarity, best_frame.area_ratio*100, occ, best_frame.score);
+                                pendingUploads.push_back({t.id, best_frame, occ});
                                 
                                 captured_person_ids->insert(t.id);
                                 captured_face_ids->insert(t.id);
@@ -601,11 +626,25 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                     return false;
                 });
     tracks.erase(it, tracks.end());
+    snapshot = tracks;
+    lock.unlock();
+    for (const auto& upload : pendingUploads) {
+        upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
+        upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
+        log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 综合评分: %.2f)",
+                 upload.trackId,
+                 upload.bestFrame.clarity,
+                 upload.bestFrame.area_ratio * 100,
+                 upload.occlusion,
+                 upload.bestFrame.motion_ratio,
+                 upload.bestFrame.score);
+    }
 
-    return tracks;
+    return snapshot;
 }
 
 std::vector<Track> get_expiring_tracks() {
+    std::lock_guard<std::mutex> lock(tracks_mutex);
     std::vector<Track> expiring_tracks;
     
     // 找到即将被删除的tracks
@@ -619,9 +658,10 @@ std::vector<Track> get_expiring_tracks() {
 }
 
 void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
+    std::lock_guard<std::mutex> lock(tracks_mutex);
     for (auto& t : tracks) {
         if (t.id == track_id) {
-            if (t.frame_candidates.size() < 20) {
+            if (t.frame_candidates.size() < CAPTURE_MAX_FRAME_CANDIDATES) {
                 t.frame_candidates.push_back(frame_data);
                 log_debug("Track %d 添加候选帧 (评分: %.2f, 候选帧总数: %zu)", 
                          track_id, frame_data.score, t.frame_candidates.size());
