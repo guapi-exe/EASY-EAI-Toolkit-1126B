@@ -773,9 +773,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
         if (occ_it != trackOcclusionRatio.end()) {
             person_occlusion = occ_it->second;
         }
-        if (person_occlusion > CAPTURE_MAX_PERSON_OCCLUSION) {
-            continue;
-        }
 
         int& skip_counter = trackFaceDetectSkipCounters[t.id];
         skip_counter = (skip_counter + 1) % CAPTURE_FACE_DETECT_INTERVAL;
@@ -854,9 +851,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
                 (CAPTURE_FACE_EDGE_MIN_MARGIN - min_margin_ratio) / CAPTURE_FACE_EDGE_MIN_MARGIN;
             face_edge_occlusion = std::max(0.0f, std::min(1.0f, face_edge_occlusion));
         }
-        if (face_edge_occlusion > CAPTURE_MAX_FACE_EDGE_OCCLUSION) {
-            continue;
-        }
 
         cv::Point2f left_eye = best_face.landmarks[0];
         cv::Point2f right_eye = best_face.landmarks[1];
@@ -920,7 +914,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
 
         float ideal_area = CAMERA_WIDTH * CAMERA_HEIGHT * 0.15f;
         float area_score = 1.0f / (1.0f + abs(current_area_4k - ideal_area) / ideal_area);
-        float occlusion_penalty = person_occlusion * 0.7f + face_edge_occlusion * 0.3f;
+        float person_occ_norm = person_occlusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
+        person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
+        float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, CAPTURE_MAX_FACE_EDGE_OCCLUSION);
+        face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
+        float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
         double current_score = current_clarity * quality_weight +
                        area_score * 1000 * area_weight -
                        occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY;

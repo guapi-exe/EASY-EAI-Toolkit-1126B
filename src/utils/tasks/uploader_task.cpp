@@ -92,11 +92,22 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         cv::resize(work, work, cv::Size(target_w, target_h), 0, 0, cv::INTER_CUBIC);
     }
 
+    cv::Mat gray_in;
+    cv::cvtColor(work, gray_in, cv::COLOR_BGR2GRAY);
+    double mean_luma_before = cv::mean(gray_in)[0];
+
+    cv::Mat lap;
+    cv::Laplacian(gray_in, lap, CV_32F);
+    cv::Scalar lap_mu, lap_sigma;
+    cv::meanStdDev(lap, lap_mu, lap_sigma);
+    double lap_var = lap_sigma[0] * lap_sigma[0];
+    float blur_severity = static_cast<float>(std::max(0.0, std::min(1.0, (120.0 - lap_var) / 120.0)));
+
     cv::Mat lab;
     cv::cvtColor(work, lab, cv::COLOR_BGR2Lab);
     std::vector<cv::Mat> lab_channels;
     cv::split(lab, lab_channels);
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.2, cv::Size(8, 8));
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.35, cv::Size(8, 8));
     clahe->apply(lab_channels[0], lab_channels[0]);
     cv::merge(lab_channels, lab);
     cv::cvtColor(lab, work, cv::COLOR_Lab2BGR);
@@ -114,12 +125,25 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     cv::filter2D(denoised, dir_response, CV_32F, kernel);
     cv::Mat dir_u8;
     cv::convertScaleAbs(dir_response, dir_u8, 0.08, 0);
-    cv::addWeighted(sharp, 1.0, dir_u8, 0.18, 0, sharp);
+    float directional_gain = 0.06f + 0.08f * blur_severity;
+    cv::addWeighted(sharp, 1.0, dir_u8, directional_gain, 0, sharp);
 
     cv::Mat blur;
     cv::GaussianBlur(sharp, blur, cv::Size(0, 0), 1.1);
     cv::Mat out;
-    cv::addWeighted(sharp, 1.6, blur, -0.6, 0, out);
+    float unsharp_amount = 1.18f + 0.20f * blur_severity;
+    cv::addWeighted(sharp, unsharp_amount, blur, -(unsharp_amount - 1.0f), 0, out);
+
+    cv::Mat gray_out;
+    cv::cvtColor(out, gray_out, cv::COLOR_BGR2GRAY);
+    double mean_luma_after = cv::mean(gray_out)[0];
+    if (mean_luma_after > 1e-3) {
+        // 将增强后整体亮度回拉到接近原图，避免发白。
+        double gain = mean_luma_before / mean_luma_after;
+        gain = std::max(0.88, std::min(1.05, gain));
+        out.convertTo(out, -1, gain, 0);
+    }
+
     return out;
 }
 }
