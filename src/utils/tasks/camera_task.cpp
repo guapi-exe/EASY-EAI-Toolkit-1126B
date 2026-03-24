@@ -837,6 +837,13 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx, rknn_con
             continue;
         }
 
+        int face_short_side = std::min(base_fbox.width, base_fbox.height);
+        int face_area = base_fbox.area();
+        if (face_short_side < CAPTURE_MIN_FACE_BOX_SHORT_SIDE ||
+            face_area < CAPTURE_MIN_FACE_BOX_AREA) {
+            continue;
+        }
+
         float margin_left = static_cast<float>(base_fbox.x);
         float margin_right = static_cast<float>(person_roi.cols - (base_fbox.x + base_fbox.width));
         float margin_top = static_cast<float>(base_fbox.y);

@@ -9,6 +9,9 @@ extern "C" {
 namespace {
 constexpr size_t kUploadMaxBytes = 300 * 1024;
 constexpr size_t kUploadQueueMaxSize = 80;
+constexpr int kUploadDefaultJpegQuality = 90;
+constexpr int kUploadMinLongEdge = 720;
+constexpr int kUploadMaxLongEdge = 1280;
 
 std::string generate_unique_code_12() {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -29,30 +32,103 @@ void add_form_field(curl_mime* form, const char* name, const std::string& value)
     curl_mime_data(field, value.c_str(), CURL_ZERO_TERMINATED);
 }
 
-std::vector<uchar> encode_image_for_upload(const cv::Mat& img) {
+cv::Mat resize_to_long_edge(const cv::Mat& img, int target_long_edge, int interpolation) {
+    int current_long_edge = std::max(img.cols, img.rows);
+    if (img.empty() || current_long_edge <= 0 || current_long_edge <= target_long_edge) {
+        return img;
+    }
+
+    float scale = target_long_edge / static_cast<float>(current_long_edge);
+    cv::Mat resized;
+    cv::resize(img, resized, cv::Size(), scale, scale, interpolation);
+    return resized;
+}
+
+std::vector<uchar> encode_jpeg(const cv::Mat& img, int quality) {
     std::vector<uchar> buf;
-    cv::imencode(".jpg", img, buf);
-
-    if (buf.size() <= kUploadMaxBytes) {
-        return buf;
-    }
-
-    // 超过300KB则逐步降低质量重编码
-    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 85};
-    for (int quality = 85; quality >= 35; quality -= 10) {
-        params[1] = quality;
-        std::vector<uchar> compressed;
-        cv::imencode(".jpg", img, compressed, params);
-        if (compressed.size() <= kUploadMaxBytes || quality == 35) {
-            log_info("UploaderTask: image compressed from %zuKB to %zuKB (quality=%d)",
-                     buf.size() / 1024,
-                     compressed.size() / 1024,
-                     quality);
-            return compressed;
-        }
-    }
-
+    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, quality};
+    cv::imencode(".jpg", img, buf, params);
     return buf;
+}
+
+std::vector<uchar> encode_image_for_upload(const cv::Mat& img) {
+    if (img.empty()) {
+        return {};
+    }
+
+    std::vector<uchar> original = encode_jpeg(img, kUploadDefaultJpegQuality);
+    if (original.size() <= kUploadMaxBytes) {
+        return original;
+    }
+
+    cv::Mat working = img;
+    int original_long_edge = std::max(img.cols, img.rows);
+    if (original_long_edge > kUploadMaxLongEdge) {
+        working = resize_to_long_edge(working, kUploadMaxLongEdge, cv::INTER_AREA);
+    }
+
+    std::vector<uchar> best = encode_jpeg(working, kUploadDefaultJpegQuality);
+    static const int kQualities[] = {90, 84, 78, 72, 66, 60, 55};
+
+    while (true) {
+        for (int quality : kQualities) {
+            std::vector<uchar> compressed = encode_jpeg(working, quality);
+            best = compressed;
+            if (compressed.size() <= kUploadMaxBytes) {
+                log_info("UploaderTask: image encoded from %zuKB to %zuKB (quality=%d, size=%dx%d)",
+                         original.size() / 1024,
+                         compressed.size() / 1024,
+                         quality,
+                         working.cols,
+                         working.rows);
+                return compressed;
+            }
+        }
+
+        int current_long_edge = std::max(working.cols, working.rows);
+        if (current_long_edge <= kUploadMinLongEdge) {
+            break;
+        }
+
+        int next_long_edge = std::max(kUploadMinLongEdge, static_cast<int>(std::round(current_long_edge * 0.88f)));
+        if (next_long_edge >= current_long_edge) {
+            break;
+        }
+        working = resize_to_long_edge(working, next_long_edge, cv::INTER_AREA);
+    }
+
+    log_info("UploaderTask: image encoded from %zuKB to %zuKB (quality=%d, size=%dx%d)",
+             original.size() / 1024,
+             best.size() / 1024,
+             55,
+             working.cols,
+             working.rows);
+    return best;
+}
+
+double compute_laplacian_variance(const cv::Mat& gray) {
+    cv::Mat lap;
+    cv::Laplacian(gray, lap, CV_32F);
+    cv::Scalar lap_mu, lap_sigma;
+    cv::meanStdDev(lap, lap_mu, lap_sigma);
+    return lap_sigma[0] * lap_sigma[0];
+}
+
+cv::Mat upscale_small_face(const cv::Mat& face) {
+    int short_edge = std::min(face.cols, face.rows);
+    if (face.empty() || short_edge <= 0 || short_edge >= 220) {
+        return face.clone();
+    }
+
+    float scale = std::min(1.65f, 220.0f / static_cast<float>(short_edge));
+    if (scale <= 1.05f) {
+        return face.clone();
+    }
+
+    cv::Mat upscaled;
+    int interpolation = scale > 1.35f ? cv::INTER_LANCZOS4 : cv::INTER_CUBIC;
+    cv::resize(face, upscaled, cv::Size(), scale, scale, interpolation);
+    return upscaled;
 }
 
 double estimate_blur_angle_deg(const cv::Mat& gray) {
@@ -84,63 +160,71 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         return face;
     }
 
-    cv::Mat work = face;
-
-    if (work.cols < 260) {
-        int target_w = std::min(560, std::max(work.cols * 2, 300));
-        int target_h = std::max(1, static_cast<int>(work.rows * (target_w / static_cast<float>(work.cols))));
-        cv::resize(work, work, cv::Size(target_w, target_h), 0, 0, cv::INTER_CUBIC);
+    cv::Mat gray_in;
+    cv::cvtColor(face, gray_in, cv::COLOR_BGR2GRAY);
+    double mean_luma_before = cv::mean(gray_in)[0];
+    double lap_var = compute_laplacian_variance(gray_in);
+    float blur_severity = static_cast<float>(std::max(0.0, std::min(1.0, (120.0 - lap_var) / 120.0)));
+    bool needs_upscale = std::min(face.cols, face.rows) < 220;
+    bool needs_enhance = needs_upscale || lap_var < 180.0 || mean_luma_before < 105.0;
+    if (!needs_enhance) {
+        return face.clone();
     }
 
-    cv::Mat gray_in;
-    cv::cvtColor(work, gray_in, cv::COLOR_BGR2GRAY);
-    double mean_luma_before = cv::mean(gray_in)[0];
+    cv::Mat work = upscale_small_face(face);
 
-    cv::Mat lap;
-    cv::Laplacian(gray_in, lap, CV_32F);
-    cv::Scalar lap_mu, lap_sigma;
-    cv::meanStdDev(lap, lap_mu, lap_sigma);
-    double lap_var = lap_sigma[0] * lap_sigma[0];
-    float blur_severity = static_cast<float>(std::max(0.0, std::min(1.0, (120.0 - lap_var) / 120.0)));
+    if (mean_luma_before < 105.0) {
+        cv::Mat lab;
+        cv::cvtColor(work, lab, cv::COLOR_BGR2Lab);
+        std::vector<cv::Mat> lab_channels;
+        cv::split(lab, lab_channels);
+        double clip_limit = mean_luma_before < 85.0 ? 1.18 : 1.10;
+        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(clip_limit, cv::Size(8, 8));
+        clahe->apply(lab_channels[0], lab_channels[0]);
+        cv::merge(lab_channels, lab);
+        cv::cvtColor(lab, work, cv::COLOR_Lab2BGR);
+    }
 
-    cv::Mat lab;
-    cv::cvtColor(work, lab, cv::COLOR_BGR2Lab);
-    std::vector<cv::Mat> lab_channels;
-    cv::split(lab, lab_channels);
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(1.35, cv::Size(8, 8));
-    clahe->apply(lab_channels[0], lab_channels[0]);
-    cv::merge(lab_channels, lab);
-    cv::cvtColor(lab, work, cv::COLOR_Lab2BGR);
+    cv::Mat work_f;
+    work.convertTo(work_f, CV_32FC3);
+    cv::Mat base_f;
+    cv::GaussianBlur(work_f, base_f, cv::Size(0, 0), 0.75 + 0.20 * blur_severity);
+    cv::Mat detail_f = work_f - base_f;
+    float detail_gain = 0.14f + 0.10f * blur_severity;
+    cv::Mat enhanced_f = work_f + detail_f * detail_gain;
 
-    cv::Mat denoised;
-    cv::bilateralFilter(work, denoised, 5, 35, 35);
+    if (blur_severity > 0.55f) {
+        cv::Mat gray_work;
+        cv::cvtColor(work, gray_work, cv::COLOR_BGR2GRAY);
+        double angle = estimate_blur_angle_deg(gray_work);
+        cv::Mat kernel = cv::getGaborKernel(cv::Size(7, 7), 1.8, angle * CV_PI / 180.0, 4.5, 0.9, 0.0, CV_32F);
+        cv::Mat directional;
+        cv::filter2D(gray_work, directional, CV_32F, kernel);
+        cv::normalize(directional, directional, -12.0f, 12.0f, cv::NORM_MINMAX);
 
-    cv::Mat gray;
-    cv::cvtColor(denoised, gray, cv::COLOR_BGR2GRAY);
-    double angle = estimate_blur_angle_deg(gray);
+        std::vector<cv::Mat> channels;
+        cv::split(enhanced_f, channels);
+        for (auto& channel : channels) {
+            channel += directional * 0.035f;
+        }
+        cv::merge(channels, enhanced_f);
+    }
 
-    cv::Mat sharp = denoised.clone();
-    cv::Mat kernel = cv::getGaborKernel(cv::Size(9, 9), 2.0, angle * CV_PI / 180.0, 5.0, 0.8, 0.0, CV_32F);
-    cv::Mat dir_response;
-    cv::filter2D(denoised, dir_response, CV_32F, kernel);
-    cv::Mat dir_u8;
-    cv::convertScaleAbs(dir_response, dir_u8, 0.08, 0);
-    float directional_gain = 0.06f + 0.08f * blur_severity;
-    cv::addWeighted(sharp, 1.0, dir_u8, directional_gain, 0, sharp);
+    cv::Mat enhanced;
+    enhanced_f.convertTo(enhanced, CV_8UC3);
 
     cv::Mat blur;
-    cv::GaussianBlur(sharp, blur, cv::Size(0, 0), 1.1);
+    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.70 + 0.15 * blur_severity);
     cv::Mat out;
-    float unsharp_amount = 1.18f + 0.20f * blur_severity;
-    cv::addWeighted(sharp, unsharp_amount, blur, -(unsharp_amount - 1.0f), 0, out);
+    float unsharp_amount = 0.14f + 0.08f * blur_severity;
+    cv::addWeighted(enhanced, 1.0f + unsharp_amount, blur, -unsharp_amount, 0, out);
 
     cv::Mat gray_out;
     cv::cvtColor(out, gray_out, cv::COLOR_BGR2GRAY);
     double mean_luma_after = cv::mean(gray_out)[0];
     if (mean_luma_after > 1e-3) {
-        // 将增强后整体亮度回拉到接近原图，避免发白。
         double gain = mean_luma_before / mean_luma_after;
-        gain = std::max(0.88, std::min(1.05, gain));
+        gain = std::max(0.92, std::min(1.03, gain));
         out.convertTo(out, -1, gain, 0);
     }
 
