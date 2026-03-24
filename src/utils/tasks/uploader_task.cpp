@@ -154,6 +154,74 @@ cv::Mat apply_unsharp_mask(const cv::Mat& src, double sigma, float amount) {
     return out;
 }
 
+cv::Mat compress_face_highlights(const cv::Mat& src) {
+    if (src.empty()) {
+        return src.clone();
+    }
+
+    cv::Mat lab;
+    cv::cvtColor(src, lab, cv::COLOR_BGR2Lab);
+    std::vector<cv::Mat> channels;
+    cv::split(lab, channels);
+
+    cv::Mat lightness_f;
+    channels[0].convertTo(lightness_f, CV_32F);
+    for (int y = 0; y < lightness_f.rows; ++y) {
+        float* row = lightness_f.ptr<float>(y);
+        for (int x = 0; x < lightness_f.cols; ++x) {
+            float value = row[x];
+            if (value > 214.0f) {
+                value = 214.0f + (value - 214.0f) * 0.42f;
+            }
+            if (value > 238.0f) {
+                value = 238.0f + (value - 238.0f) * 0.22f;
+            }
+            row[x] = std::max(0.0f, std::min(255.0f, value));
+        }
+    }
+
+    lightness_f.convertTo(channels[0], CV_8U);
+    cv::merge(channels, lab);
+
+    cv::Mat out;
+    cv::cvtColor(lab, out, cv::COLOR_Lab2BGR);
+    return out;
+}
+
+cv::Mat suppress_halo_artifacts(const cv::Mat& reference, const cv::Mat& enhanced) {
+    if (reference.empty() || enhanced.empty() || reference.size() != enhanced.size()) {
+        return enhanced.clone();
+    }
+
+    cv::Mat ref_gray, enh_gray;
+    cv::cvtColor(reference, ref_gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(enhanced, enh_gray, cv::COLOR_BGR2GRAY);
+
+    cv::Mat diff;
+    cv::subtract(enh_gray, ref_gray, diff);
+
+    cv::Mat bright_mask, gain_mask, halo_mask;
+    cv::threshold(ref_gray, bright_mask, 168, 255, cv::THRESH_BINARY);
+    cv::threshold(diff, gain_mask, 14, 255, cv::THRESH_BINARY);
+    cv::bitwise_and(bright_mask, gain_mask, halo_mask);
+    cv::GaussianBlur(halo_mask, halo_mask, cv::Size(0, 0), 2.2);
+
+    cv::Mat halo_mask_f;
+    halo_mask.convertTo(halo_mask_f, CV_32F, 1.0 / 255.0);
+    std::vector<cv::Mat> halo_channels(3, halo_mask_f);
+    cv::Mat halo3;
+    cv::merge(halo_channels, halo3);
+
+    cv::Mat ref_f, enh_f;
+    reference.convertTo(ref_f, CV_32FC3);
+    enhanced.convertTo(enh_f, CV_32FC3);
+    cv::Mat blended = enh_f.mul(1.0f - halo3 * 0.55f) + ref_f.mul(halo3 * 0.55f);
+
+    cv::Mat out;
+    blended.convertTo(out, CV_8UC3);
+    return out;
+}
+
 cv::Mat opencv_super_resolve_face(const cv::Mat& face) {
     if (face.empty()) {
         return face.clone();
@@ -177,9 +245,15 @@ cv::Mat opencv_super_resolve_face(const cv::Mat& face) {
     cv::bilateralFilter(upscaled, filtered, 7, 28, 18);
 
     cv::Mat detailed;
-    cv::detailEnhance(filtered, detailed, 8.0f, 0.20f);
+    cv::detailEnhance(filtered, detailed, 4.5f, 0.08f);
 
-    cv::Mat sr = apply_unsharp_mask(detailed, 0.65, 0.16f);
+    cv::Mat softened;
+    cv::addWeighted(filtered, 0.72, detailed, 0.28, 0, softened);
+    softened = compress_face_highlights(softened);
+    softened = suppress_halo_artifacts(filtered, softened);
+
+    cv::Mat sr = apply_unsharp_mask(softened, 0.85, 0.08f);
+    sr = suppress_halo_artifacts(filtered, sr);
     return sr;
 }
 
@@ -394,7 +468,7 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         if (blur_severity > 0.62f) {
             work = apply_motion_wiener_restore_bgr(work, angle, 13, 3.5f);
         }
-        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 11 : 9, 0.18f + 0.12f * blur_severity);
+        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 11 : 9, 0.10f + 0.08f * blur_severity);
         directional_face.convertTo(enhanced_f, CV_32FC3);
 
         cv::Mat kernel = cv::getGaborKernel(cv::Size(7, 7), 1.8, angle * CV_PI / 180.0, 4.5, 0.9, 0.0, CV_32F);
@@ -405,19 +479,21 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         std::vector<cv::Mat> channels;
         cv::split(enhanced_f, channels);
         for (auto& channel : channels) {
-            channel += directional * 0.030f;
+            channel += directional * 0.018f;
         }
         cv::merge(channels, enhanced_f);
     }
 
     cv::Mat enhanced;
     enhanced_f.convertTo(enhanced, CV_8UC3);
+    enhanced = compress_face_highlights(enhanced);
 
     cv::Mat blur;
-    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.55 + 0.10 * blur_severity);
+    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.70 + 0.12 * blur_severity);
     cv::Mat out;
-    float unsharp_amount = 0.11f + 0.04f * blur_severity;
+    float unsharp_amount = 0.06f + 0.03f * blur_severity;
     cv::addWeighted(enhanced, 1.0f + unsharp_amount, blur, -unsharp_amount, 0, out);
+    out = suppress_halo_artifacts(work, out);
 
     cv::Mat gray_out;
     cv::cvtColor(out, gray_out, cv::COLOR_BGR2GRAY);
@@ -449,8 +525,10 @@ cv::Mat opencv_superres_deblur_face(const cv::Mat& face) {
         deblurred = apply_motion_wiener_restore_bgr(deblurred, angle, severity > 0.60f ? 15 : 11, 3.8f);
     }
 
-    cv::Mat final_face = apply_directional_unsharp(deblurred, angle, severity > 0.55f ? 11 : 9, 0.18f + 0.10f * severity);
-    final_face = apply_unsharp_mask(final_face, 0.55, 0.12f);
+    cv::Mat final_face = apply_directional_unsharp(deblurred, angle, severity > 0.55f ? 11 : 9, 0.08f + 0.06f * severity);
+    final_face = apply_unsharp_mask(final_face, 0.75, 0.06f);
+    final_face = compress_face_highlights(final_face);
+    final_face = suppress_halo_artifacts(sr, final_face);
     return final_face;
 }
 
