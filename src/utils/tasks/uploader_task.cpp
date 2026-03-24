@@ -12,6 +12,7 @@ constexpr size_t kUploadQueueMaxSize = 80;
 constexpr int kUploadDefaultJpegQuality = 90;
 constexpr int kUploadMinLongEdge = 720;
 constexpr int kUploadMaxLongEdge = 1280;
+constexpr int kUploadPersonMaxLongEdge = 1536;
 
 std::string generate_unique_code_12() {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -51,7 +52,7 @@ std::vector<uchar> encode_jpeg(const cv::Mat& img, int quality) {
     return buf;
 }
 
-std::vector<uchar> encode_image_for_upload(const cv::Mat& img) {
+std::vector<uchar> encode_image_for_upload(const cv::Mat& img, int max_long_edge = kUploadMaxLongEdge) {
     if (img.empty()) {
         return {};
     }
@@ -63,8 +64,8 @@ std::vector<uchar> encode_image_for_upload(const cv::Mat& img) {
 
     cv::Mat working = img;
     int original_long_edge = std::max(img.cols, img.rows);
-    if (original_long_edge > kUploadMaxLongEdge) {
-        working = resize_to_long_edge(working, kUploadMaxLongEdge, cv::INTER_AREA);
+    if (original_long_edge > max_long_edge) {
+        working = resize_to_long_edge(working, max_long_edge, cv::INTER_AREA);
     }
 
     std::vector<uchar> best = encode_jpeg(working, kUploadDefaultJpegQuality);
@@ -398,7 +399,8 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
         processed = motion_deblur_enhance_person(img);
     }
 
-    std::vector<uchar> buf = encode_image_for_upload(processed);
+    int preferred_long_edge = (type == "person") ? kUploadPersonMaxLongEdge : kUploadMaxLongEdge;
+    std::vector<uchar> buf = encode_image_for_upload(processed, preferred_long_edge);
     curl_mime *form = curl_mime_init(curl);
     curl_mimepart *field;
 

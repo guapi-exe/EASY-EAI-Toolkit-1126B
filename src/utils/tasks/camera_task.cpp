@@ -290,16 +290,33 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     cv::Point2f left_eye = landmarks[0];
     cv::Point2f right_eye = landmarks[1];
     cv::Point2f nose = landmarks[2];
-    // cv::Point2f left_mouth = landmarks[3];
-    // cv::Point2f right_mouth = landmarks[4];
+    cv::Point2f left_mouth = landmarks[3];
+    cv::Point2f right_mouth = landmarks[4];
 
     float dx = right_eye.x - left_eye.x;
     float dy = right_eye.y - left_eye.y;
+    if (std::fabs(dx) < 1e-5f) {
+        return false;
+    }
+
     float roll = atan2(dy, dx) * 180.0 / CV_PI;
 
     float eye_center_x = (left_eye.x + right_eye.x) / 2.0;
     float yaw = (nose.x - eye_center_x) / dx;
-    return (fabs(roll) < 20.0) && (fabs(yaw) < 0.25);
+    cv::Point2f mouth_center((left_mouth.x + right_mouth.x) * 0.5f,
+                             (left_mouth.y + right_mouth.y) * 0.5f);
+    float eye_distance = std::max(1e-5f, std::fabs(dx));
+    float mouth_offset = std::fabs(mouth_center.x - eye_center_x) / eye_distance;
+    float mouth_roll = std::fabs(left_mouth.y - right_mouth.y) / eye_distance;
+    float nose_vertical_ratio = (nose.y - (left_eye.y + right_eye.y) * 0.5f) / eye_distance;
+    float mouth_vertical_ratio = (mouth_center.y - nose.y) / eye_distance;
+
+    return (std::fabs(roll) < CAPTURE_STRONG_FRONTAL_MAX_ROLL) &&
+           (std::fabs(yaw) < CAPTURE_STRONG_FRONTAL_MAX_YAW) &&
+           (mouth_offset < 0.18f) &&
+           (mouth_roll < 0.15f) &&
+           (nose_vertical_ratio > 0.08f) &&
+           (mouth_vertical_ratio > 0.10f);
 }
 
 // 新增：判断是否为侧脸
@@ -469,6 +486,17 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                             int face_area = base_fbox.area();
                             if (face_short_side >= CAPTURE_MIN_FACE_BOX_SHORT_SIDE &&
                                 face_area >= CAPTURE_MIN_FACE_BOX_AREA) {
+                                float person_area = static_cast<float>(job.personRoi.cols * job.personRoi.rows);
+                                float face_area_ratio = face_area / std::max(1.0f, person_area);
+                                float face_width_ratio = static_cast<float>(base_fbox.width) / std::max(1, job.personRoi.cols);
+                                float face_center_y_ratio = static_cast<float>(base_fbox.y + base_fbox.height * 0.5f) / std::max(1, job.personRoi.rows);
+                                if (face_area_ratio < CAPTURE_FACE_MIN_AREA_IN_PERSON ||
+                                    face_width_ratio < CAPTURE_FACE_MIN_WIDTH_RATIO ||
+                                    face_center_y_ratio < CAPTURE_FACE_MIN_CENTER_Y_RATIO ||
+                                    face_center_y_ratio > CAPTURE_FACE_MAX_CENTER_Y_RATIO) {
+                                    continue;
+                                }
+
                                 float margin_left = static_cast<float>(base_fbox.x);
                                 float margin_right = static_cast<float>(job.personRoi.cols - (base_fbox.x + base_fbox.width));
                                 float margin_top = static_cast<float>(base_fbox.y);
@@ -510,7 +538,31 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                   std::min(crop_h, job.personRoi.rows - crop_y));
 
                                         if (fbox.width > 0 && fbox.height > 0) {
+                                            float crop_margin_left = static_cast<float>(base_fbox.x - fbox.x) / std::max(1, base_fbox.width);
+                                            float crop_margin_right = static_cast<float>((fbox.x + fbox.width) - (base_fbox.x + base_fbox.width)) / std::max(1, base_fbox.width);
+                                            float crop_margin_top = static_cast<float>(base_fbox.y - fbox.y) / std::max(1, base_fbox.height);
+                                            float crop_margin_bottom = static_cast<float>((fbox.y + fbox.height) - (base_fbox.y + base_fbox.height)) / std::max(1, base_fbox.height);
+                                            float crop_min_margin = std::min(std::min(crop_margin_left, crop_margin_right),
+                                                                             std::min(crop_margin_top, crop_margin_bottom));
+                                            if (crop_min_margin < CAPTURE_HEADSHOT_MIN_FACE_MARGIN) {
+                                                continue;
+                                            }
+
                                             Mat face_aligned = job.personRoi(fbox).clone();
+                                            int upper_body_w = std::min(job.personRoi.cols,
+                                                std::max(static_cast<int>(base_fbox.width * 4.2f), static_cast<int>(job.personRoi.cols * 0.72f)));
+                                            int upper_body_h = std::min(job.personRoi.rows,
+                                                std::max(static_cast<int>(base_fbox.height * 5.6f), static_cast<int>(job.personRoi.rows * 0.78f)));
+                                            int upper_body_cx = base_fbox.x + base_fbox.width / 2;
+                                            int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * 1.45f);
+                                            int upper_body_x = std::max(0, std::min(job.personRoi.cols - upper_body_w, upper_body_cx - upper_body_w / 2));
+                                            int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h, upper_body_cy - upper_body_h / 3));
+                                            cv::Rect upper_body_box(
+                                                upper_body_x,
+                                                upper_body_y,
+                                                std::min(upper_body_w, job.personRoi.cols - upper_body_x),
+                                                std::min(upper_body_h, job.personRoi.rows - upper_body_y));
+                                            cv::Mat person_aligned = job.personRoi(upper_body_box).clone();
                                             float quality_weight, area_weight;
                                             if (yaw < 0.15f) {
                                                 quality_weight = 0.8f;
@@ -542,7 +594,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                                area_score * 1000 * area_weight -
                                                                occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
                                                                motion_penalty * CAPTURE_MOTION_SCORE_PENALTY;
-                                            frame_data.person_roi = job.personRoi.clone();
+                                            frame_data.person_roi = person_aligned;
                                             frame_data.face_roi = face_aligned;
                                             frame_data.has_face = true;
                                             frame_data.is_frontal = frontal_ok;
@@ -1003,7 +1055,17 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         
         if (orig_width <= 0 || orig_height <= 0) continue;
         
-        Rect bbox_4k(orig_x, orig_y, orig_width, orig_height);
+        int expand_x = static_cast<int>(orig_width * CAPTURE_PERSON_CONTEXT_EXPAND_X);
+        int expand_top = static_cast<int>(orig_height * CAPTURE_PERSON_CONTEXT_EXPAND_TOP);
+        int expand_bottom = static_cast<int>(orig_height * CAPTURE_PERSON_CONTEXT_EXPAND_BOTTOM);
+        int expanded_x = std::max(0, orig_x - expand_x);
+        int expanded_y = std::max(0, orig_y - expand_top);
+        int expanded_right = std::min(CAMERA_WIDTH, orig_x + orig_width + expand_x);
+        int expanded_bottom = std::min(CAMERA_HEIGHT, orig_y + orig_height + expand_bottom);
+        Rect bbox_4k(expanded_x,
+                 expanded_y,
+                 std::max(1, expanded_right - expanded_x),
+                 std::max(1, expanded_bottom - expanded_y));
 
         float current_area_4k = bbox_4k.width * bbox_4k.height;
         float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
