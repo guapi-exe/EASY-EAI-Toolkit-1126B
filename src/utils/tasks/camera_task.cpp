@@ -537,96 +537,97 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                             face_edge_occlusion < CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION;
 
                                         if (strong_candidate_ok || fallback_candidate_ok) {
-                                        int crop_w = std::max(1, static_cast<int>(base_fbox.width * CAPTURE_HEADSHOT_EXPAND_RATIO));
-                                        int crop_h = std::max(1, static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_EXPAND_RATIO));
-                                        int crop_cx = base_fbox.x + base_fbox.width / 2;
-                                        int crop_cy = base_fbox.y + base_fbox.height / 2 + static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_DOWN_SHIFT);
-                                        int crop_x = crop_cx - crop_w / 2;
-                                        int crop_y = crop_cy - crop_h / 2;
+                                            int crop_w = std::max(1, static_cast<int>(base_fbox.width * CAPTURE_HEADSHOT_EXPAND_RATIO));
+                                            int crop_h = std::max(1, static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_EXPAND_RATIO));
+                                            int crop_cx = base_fbox.x + base_fbox.width / 2;
+                                            int crop_cy = base_fbox.y + base_fbox.height / 2 + static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_DOWN_SHIFT);
+                                            int crop_x = crop_cx - crop_w / 2;
+                                            int crop_y = crop_cy - crop_h / 2;
 
-                                        crop_x = std::max(0, std::min(job.personRoi.cols - crop_w, crop_x));
-                                        crop_y = std::max(0, std::min(job.personRoi.rows - crop_h, crop_y));
-                                        Rect fbox(crop_x, crop_y,
-                                                  std::min(crop_w, job.personRoi.cols - crop_x),
-                                                  std::min(crop_h, job.personRoi.rows - crop_y));
+                                            crop_x = std::max(0, std::min(job.personRoi.cols - crop_w, crop_x));
+                                            crop_y = std::max(0, std::min(job.personRoi.rows - crop_h, crop_y));
+                                            Rect fbox(crop_x, crop_y,
+                                                      std::min(crop_w, job.personRoi.cols - crop_x),
+                                                      std::min(crop_h, job.personRoi.rows - crop_y));
 
-                                        if (fbox.width > 0 && fbox.height > 0) {
-                                            float crop_margin_left = static_cast<float>(base_fbox.x - fbox.x) / std::max(1, base_fbox.width);
-                                            float crop_margin_right = static_cast<float>((fbox.x + fbox.width) - (base_fbox.x + base_fbox.width)) / std::max(1, base_fbox.width);
-                                            float crop_margin_top = static_cast<float>(base_fbox.y - fbox.y) / std::max(1, base_fbox.height);
-                                            float crop_margin_bottom = static_cast<float>((fbox.y + fbox.height) - (base_fbox.y + base_fbox.height)) / std::max(1, base_fbox.height);
-                                            float crop_min_margin = std::min(std::min(crop_margin_left, crop_margin_right),
-                                                                             std::min(crop_margin_top, crop_margin_bottom));
-                                            float required_crop_margin = strong_candidate_ok ?
-                                                CAPTURE_HEADSHOT_MIN_FACE_MARGIN :
-                                                CAPTURE_FALLBACK_HEADSHOT_MIN_FACE_MARGIN;
-                                            if (crop_min_margin >= required_crop_margin) {
-                                                Mat face_aligned = job.personRoi(fbox).clone();
-                                                int upper_body_w = std::min(job.personRoi.cols,
-                                                    std::max(static_cast<int>(base_fbox.width * 4.2f), static_cast<int>(job.personRoi.cols * 0.72f)));
-                                                int upper_body_h = std::min(job.personRoi.rows,
-                                                    std::max(static_cast<int>(base_fbox.height * 5.6f), static_cast<int>(job.personRoi.rows * 0.78f)));
-                                                int upper_body_cx = base_fbox.x + base_fbox.width / 2;
-                                                int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * 1.45f);
-                                                int upper_body_x = std::max(0, std::min(job.personRoi.cols - upper_body_w, upper_body_cx - upper_body_w / 2));
-                                                int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h, upper_body_cy - upper_body_h / 3));
-                                                cv::Rect upper_body_box(
-                                                    upper_body_x,
-                                                    upper_body_y,
-                                                    std::min(upper_body_w, job.personRoi.cols - upper_body_x),
-                                                    std::min(upper_body_h, job.personRoi.rows - upper_body_y));
-                                                cv::Mat person_aligned = job.personRoi(upper_body_box).clone();
-                                                float quality_weight, area_weight;
-                                                if (yaw < 0.15f) {
-                                                    quality_weight = 0.8f;
-                                                    area_weight = 0.35f;
-                                                } else if (yaw < 0.30f) {
-                                                    float ratio = (yaw - 0.15f) / 0.15f;
-                                                    quality_weight = 0.8f - ratio * 0.3f;
-                                                    area_weight = 0.35f - ratio * 0.15f;
-                                                } else if (yaw < 0.50f) {
-                                                    float ratio = (yaw - 0.30f) / 0.20f;
-                                                    quality_weight = 0.5f - ratio * 0.25f;
-                                                    area_weight = 0.2f - ratio * 0.12f;
-                                                } else {
-                                                    float ratio = (yaw - 0.50f) / 0.20f;
-                                                    quality_weight = 0.25f - ratio * 0.15f;
-                                                    area_weight = 0.08f - ratio * 0.05f;
-                                                }
+                                            if (fbox.width > 0 && fbox.height > 0) {
+                                                float crop_margin_left = static_cast<float>(base_fbox.x - fbox.x) / std::max(1, base_fbox.width);
+                                                float crop_margin_right = static_cast<float>((fbox.x + fbox.width) - (base_fbox.x + base_fbox.width)) / std::max(1, base_fbox.width);
+                                                float crop_margin_top = static_cast<float>(base_fbox.y - fbox.y) / std::max(1, base_fbox.height);
+                                                float crop_margin_bottom = static_cast<float>((fbox.y + fbox.height) - (base_fbox.y + base_fbox.height)) / std::max(1, base_fbox.height);
+                                                float crop_min_margin = std::min(std::min(crop_margin_left, crop_margin_right),
+                                                                                 std::min(crop_margin_top, crop_margin_bottom));
+                                                float required_crop_margin = strong_candidate_ok ?
+                                                    CAPTURE_HEADSHOT_MIN_FACE_MARGIN :
+                                                    CAPTURE_FALLBACK_HEADSHOT_MIN_FACE_MARGIN;
+                                                if (crop_min_margin >= required_crop_margin) {
+                                                    Mat face_aligned = job.personRoi(fbox).clone();
+                                                    int upper_body_w = std::min(job.personRoi.cols,
+                                                        std::max(static_cast<int>(base_fbox.width * 4.2f), static_cast<int>(job.personRoi.cols * 0.72f)));
+                                                    int upper_body_h = std::min(job.personRoi.rows,
+                                                        std::max(static_cast<int>(base_fbox.height * 5.6f), static_cast<int>(job.personRoi.rows * 0.78f)));
+                                                    int upper_body_cx = base_fbox.x + base_fbox.width / 2;
+                                                    int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * 1.45f);
+                                                    int upper_body_x = std::max(0, std::min(job.personRoi.cols - upper_body_w, upper_body_cx - upper_body_w / 2));
+                                                    int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h, upper_body_cy - upper_body_h / 3));
+                                                    cv::Rect upper_body_box(
+                                                        upper_body_x,
+                                                        upper_body_y,
+                                                        std::min(upper_body_w, job.personRoi.cols - upper_body_x),
+                                                        std::min(upper_body_h, job.personRoi.rows - upper_body_y));
+                                                    cv::Mat person_aligned = job.personRoi(upper_body_box).clone();
+                                                    float quality_weight, area_weight;
+                                                    if (yaw < 0.15f) {
+                                                        quality_weight = 0.8f;
+                                                        area_weight = 0.35f;
+                                                    } else if (yaw < 0.30f) {
+                                                        float ratio = (yaw - 0.15f) / 0.15f;
+                                                        quality_weight = 0.8f - ratio * 0.3f;
+                                                        area_weight = 0.35f - ratio * 0.15f;
+                                                    } else if (yaw < 0.50f) {
+                                                        float ratio = (yaw - 0.30f) / 0.20f;
+                                                        quality_weight = 0.5f - ratio * 0.25f;
+                                                        area_weight = 0.2f - ratio * 0.12f;
+                                                    } else {
+                                                        float ratio = (yaw - 0.50f) / 0.20f;
+                                                        quality_weight = 0.25f - ratio * 0.15f;
+                                                        area_weight = 0.08f - ratio * 0.05f;
+                                                    }
 
-                                                float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - 0.15f) / 0.15f);
-                                                float person_occ_norm = job.personOcclusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
-                                                person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
-                                                float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, CAPTURE_MAX_FACE_EDGE_OCCLUSION);
-                                                face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
-                                                float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
-                                                float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, CAPTURE_MAX_MOTION_RATIO));
-                                                float candidate_penalty = strong_candidate_ok ? 0.0f : CAPTURE_FALLBACK_SCORE_PENALTY;
+                                                    float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - 0.15f) / 0.15f);
+                                                    float person_occ_norm = job.personOcclusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
+                                                    person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
+                                                    float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, CAPTURE_MAX_FACE_EDGE_OCCLUSION);
+                                                    face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
+                                                    float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
+                                                    float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, CAPTURE_MAX_MOTION_RATIO));
+                                                    float candidate_penalty = strong_candidate_ok ? 0.0f : CAPTURE_FALLBACK_SCORE_PENALTY;
 
-                                                Track::FrameData frame_data;
-                                                frame_data.score = current_clarity * quality_weight +
-                                                                   area_score * 1000 * area_weight -
-                                                                   occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
-                                                                   motion_penalty * CAPTURE_MOTION_SCORE_PENALTY -
-                                                                   candidate_penalty;
-                                                frame_data.person_roi = person_aligned;
-                                                frame_data.face_roi = face_aligned;
-                                                frame_data.has_face = true;
-                                                frame_data.is_frontal = frontal_ok;
-                                                frame_data.yaw_abs = yaw;
-                                                frame_data.clarity = current_clarity;
-                                                frame_data.area_ratio = job.areaRatio;
-                                                frame_data.person_occlusion = job.personOcclusion;
-                                                frame_data.face_edge_occlusion = face_edge_occlusion;
-                                                frame_data.motion_ratio = job.motionRatio;
-                                                add_frame_candidate(job.trackId, frame_data);
+                                                    Track::FrameData frame_data;
+                                                    frame_data.score = current_clarity * quality_weight +
+                                                                       area_score * 1000 * area_weight -
+                                                                       occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
+                                                                       motion_penalty * CAPTURE_MOTION_SCORE_PENALTY -
+                                                                       candidate_penalty;
+                                                    frame_data.person_roi = person_aligned;
+                                                    frame_data.face_roi = face_aligned;
+                                                    frame_data.has_face = true;
+                                                    frame_data.is_frontal = frontal_ok;
+                                                    frame_data.yaw_abs = yaw;
+                                                    frame_data.clarity = current_clarity;
+                                                    frame_data.area_ratio = job.areaRatio;
+                                                    frame_data.person_occlusion = job.personOcclusion;
+                                                    frame_data.face_edge_occlusion = face_edge_occlusion;
+                                                    frame_data.motion_ratio = job.motionRatio;
+                                                    add_frame_candidate(job.trackId, frame_data);
 
-                                                if (!strong_candidate_ok) {
-                                                    log_debug("Track %d 添加兜底候选帧: clarity=%.1f yaw=%.2f occ=%.2f",
-                                                              job.trackId,
-                                                              current_clarity,
-                                                              yaw,
-                                                              face_edge_occlusion);
+                                                    if (!strong_candidate_ok) {
+                                                        log_debug("Track %d 添加兜底候选帧: clarity=%.1f yaw=%.2f occ=%.2f",
+                                                                  job.trackId,
+                                                                  current_clarity,
+                                                                  yaw,
+                                                                  face_edge_occlusion);
+                                                    }
                                                 }
                                             }
                                         }
