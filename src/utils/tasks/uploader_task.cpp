@@ -1,4 +1,5 @@
 #include "uploader_task.h"
+#include "main.h"
 #include "nafnet_tiny_enhancer.h"
 extern "C" {
 #include "log.h"
