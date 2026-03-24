@@ -341,16 +341,60 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
     if (pending_for_track >= CAPTURE_CANDIDATE_PER_TRACK_MAX_PENDING) {
         return false;
     }
-    if (candidateEvalQueue.size() >= CAPTURE_CANDIDATE_QUEUE_MAX) {
-        int dropped_track_id = candidateEvalQueue.front().trackId;
-        candidateEvalQueue.pop_front();
-        auto dropped_it = pendingCandidateEvalByTrack.find(dropped_track_id);
+
+    auto remove_pending_for_track = [this](int track_id) {
+        auto dropped_it = pendingCandidateEvalByTrack.find(track_id);
         if (dropped_it != pendingCandidateEvalByTrack.end()) {
             dropped_it->second--;
             if (dropped_it->second <= 0) {
                 pendingCandidateEvalByTrack.erase(dropped_it);
             }
         }
+    };
+
+    auto drop_job_at = [&](size_t index) {
+        int dropped_track_id = candidateEvalQueue[index].trackId;
+        candidateEvalQueue.erase(candidateEvalQueue.begin() + index);
+        remove_pending_for_track(dropped_track_id);
+    };
+
+    if (candidateEvalQueue.size() >= CAPTURE_CANDIDATE_QUEUE_MAX) {
+        size_t drop_index = candidateEvalQueue.size();
+
+        if (pending_for_track > 0) {
+            for (size_t i = 0; i < candidateEvalQueue.size(); ++i) {
+                if (candidateEvalQueue[i].trackId == job.trackId) {
+                    drop_index = i;
+                    break;
+                }
+            }
+        }
+
+        if (drop_index == candidateEvalQueue.size()) {
+            for (size_t i = 0; i < candidateEvalQueue.size(); ++i) {
+                int queued_track_id = candidateEvalQueue[i].trackId;
+                auto queued_it = pendingCandidateEvalByTrack.find(queued_track_id);
+                if (queued_it != pendingCandidateEvalByTrack.end() && queued_it->second > 1) {
+                    drop_index = i;
+                    break;
+                }
+            }
+        }
+
+        if (drop_index == candidateEvalQueue.size()) {
+            for (size_t i = 0; i < candidateEvalQueue.size(); ++i) {
+                if (candidateEvalQueue[i].trackId != job.trackId) {
+                    drop_index = i;
+                    break;
+                }
+            }
+        }
+
+        if (drop_index == candidateEvalQueue.size()) {
+            return false;
+        }
+
+        drop_job_at(drop_index);
     }
 
     pendingCandidateEvalByTrack[job.trackId] = pending_for_track + 1;
@@ -911,7 +955,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         trackOcclusionRatio[kv_a.first] = max_overlap;
     }
 
-    for (auto& t : tracks) {
+    if (!tracks.empty()) {
+        candidateRoundRobinOffset %= tracks.size();
+    } else {
+        candidateRoundRobinOffset = 0;
+    }
+
+    size_t track_count = tracks.size();
+    for (size_t index = 0; index < track_count; ++index) {
+        auto& t = tracks[(candidateRoundRobinOffset + index) % track_count];
         activeTrackIds.insert(t.id);
 
         Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
@@ -1000,6 +1052,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;
         enqueueCandidateEvaluation(std::move(job));
+    }
+
+    if (track_count > 0) {
+        candidateRoundRobinOffset = (candidateRoundRobinOffset + 1) % track_count;
     }
 
     for (auto it = lastTrackCenters.begin(); it != lastTrackCenters.end(); ) {

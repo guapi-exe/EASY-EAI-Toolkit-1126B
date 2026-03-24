@@ -95,6 +95,7 @@ private:
 
     // 运动稳定性：记录每个track上一次中心点（720p坐标）
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
+    size_t candidateRoundRobinOffset{0};
 
     std::unordered_set<int> reportedPersonIds;
     std::atomic<double> environmentBrightness{0.0};
