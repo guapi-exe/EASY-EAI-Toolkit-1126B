@@ -1,6 +1,7 @@
 #include "nafnet_tiny_enhancer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +110,22 @@ void pack_nchw_u8(const cv::Mat& rgb_u8, std::vector<unsigned char>* output) {
             (*output)[idx] = row[x][0];
             (*output)[plane + idx] = row[x][1];
             (*output)[plane * 2 + idx] = row[x][2];
+        }
+    }
+}
+
+void clamp_output_rgb(cv::Mat* image, float upper_bound, float scale) {
+    for (int y = 0; y < image->rows; ++y) {
+        cv::Vec3f* row = image->ptr<cv::Vec3f>(y);
+        for (int x = 0; x < image->cols; ++x) {
+            for (int c = 0; c < 3; ++c) {
+                float value = row[x][c];
+                if (!std::isfinite(value)) {
+                    value = 0.0f;
+                }
+                value = std::max(0.0f, std::min(upper_bound, value));
+                row[x][c] = value * scale;
+            }
         }
     }
 }
@@ -332,12 +349,9 @@ cv::Mat NAFNetTinyEnhancer::enhance(const cv::Mat& input) {
     rknn_outputs_release(ctx, 1, outputs);
 
     if (max_val <= 1.5) {
-        cv::max(output_rgb, 0.0, output_rgb);
-        cv::min(output_rgb, 1.0, output_rgb);
-        output_rgb *= 255.0f;
+        clamp_output_rgb(&output_rgb, 1.0f, 255.0f);
     } else {
-        cv::max(output_rgb, 0.0, output_rgb);
-        cv::min(output_rgb, 255.0, output_rgb);
+        clamp_output_rgb(&output_rgb, 255.0f, 1.0f);
     }
 
     cv::Mat output_u8;
