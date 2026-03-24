@@ -653,6 +653,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     }
 
                                                     float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - 0.15f) / 0.15f);
+                                                    float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, CAPTURE_MIN_CLARITY)));
                                                     float person_occ_norm = job.personOcclusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
                                                     person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
                                                     float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, CAPTURE_MAX_FACE_EDGE_OCCLUSION);
@@ -662,7 +663,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     float candidate_penalty = strong_candidate_ok ? 0.0f : CAPTURE_FALLBACK_SCORE_PENALTY;
 
                                                     Track::FrameData frame_data;
-                                                    frame_data.score = current_clarity * quality_weight +
+                                                    frame_data.score = current_clarity * (quality_weight + 0.10f) +
+                                                                       clarity_norm * 120.0f +
                                                                        area_score * 1000 * area_weight -
                                                                        occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
                                                                        motion_penalty * CAPTURE_MOTION_SCORE_PENALTY -
