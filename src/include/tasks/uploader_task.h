@@ -7,9 +7,6 @@
 #include <string>
 #include <atomic>
 #include <functional>
-#include <memory>
-
-class NAFNetTinyEnhancer;
 
 struct UploadItem {
     cv::Mat img;
@@ -55,5 +52,4 @@ private:
     std::atomic<bool> running;
     std::thread worker;
     UploadSuccessCallback uploadSuccessCallback;
-    std::unique_ptr<NAFNetTinyEnhancer> faceEnhancer;
 };
