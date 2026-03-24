@@ -188,6 +188,83 @@ cv::Mat apply_directional_unsharp(const cv::Mat& src, double angle_deg, int kern
     return out;
 }
 
+cv::Mat apply_motion_wiener_restore_gray(const cv::Mat& gray, double angle_deg, int kernel_len, float snr) {
+    if (gray.empty() || kernel_len < 3) {
+        return gray.clone();
+    }
+
+    kernel_len = std::max(3, kernel_len | 1);
+    cv::Mat psf = cv::Mat::zeros(gray.size(), CV_32F);
+    cv::Point center(psf.cols / 2, psf.rows / 2);
+    double rad = angle_deg * CV_PI / 180.0;
+    cv::Point delta(
+        static_cast<int>(std::round(std::cos(rad) * (kernel_len / 2))),
+        static_cast<int>(std::round(std::sin(rad) * (kernel_len / 2))));
+    cv::line(psf, center - delta, center + delta, cv::Scalar(1.0f), 1, cv::LINE_AA);
+    double psf_sum = cv::sum(psf)[0];
+    if (psf_sum <= 1e-6) {
+        psf.at<float>(center) = 1.0f;
+        psf_sum = 1.0;
+    }
+    psf /= static_cast<float>(psf_sum);
+
+    cv::Mat gray_f;
+    gray.convertTo(gray_f, CV_32F, 1.0 / 255.0);
+    cv::Mat planes_img[] = {gray_f.clone(), cv::Mat::zeros(gray.size(), CV_32F)};
+    cv::Mat complex_img;
+    cv::merge(planes_img, 2, complex_img);
+    cv::dft(complex_img, complex_img);
+
+    cv::Mat planes_psf[] = {psf.clone(), cv::Mat::zeros(gray.size(), CV_32F)};
+    cv::Mat complex_psf;
+    cv::merge(planes_psf, 2, complex_psf);
+    cv::dft(complex_psf, complex_psf);
+
+    std::vector<cv::Mat> h_planes(2);
+    cv::split(complex_psf, h_planes);
+    cv::Mat mag2 = h_planes[0].mul(h_planes[0]) + h_planes[1].mul(h_planes[1]);
+    cv::Mat denom = mag2 + 1.0f / std::max(0.5f, snr);
+
+    cv::Mat real = h_planes[0] / denom;
+    cv::Mat imag = -h_planes[1] / denom;
+    cv::Mat inv_planes[] = {real, imag};
+    cv::Mat inv_filter;
+    cv::merge(inv_planes, 2, inv_filter);
+
+    cv::mulSpectrums(complex_img, inv_filter, complex_img, 0);
+    cv::idft(complex_img, gray_f, cv::DFT_REAL_OUTPUT | cv::DFT_SCALE);
+    cv::Mat restored;
+    gray_f.convertTo(restored, CV_8U, 255.0);
+    return restored;
+}
+
+cv::Mat apply_motion_wiener_restore_bgr(const cv::Mat& src, double angle_deg, int kernel_len, float snr) {
+    if (src.empty()) {
+        return src.clone();
+    }
+
+    cv::Mat gray;
+    cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
+    cv::Mat restored_gray = apply_motion_wiener_restore_gray(gray, angle_deg, kernel_len, snr);
+
+    cv::Mat src_f, gray_f, restored_f;
+    src.convertTo(src_f, CV_32FC3);
+    gray.convertTo(gray_f, CV_32F, 1.0 / 255.0);
+    restored_gray.convertTo(restored_f, CV_32F, 1.0 / 255.0);
+
+    cv::Mat ratio;
+    cv::divide(restored_f + 1e-3f, gray_f + 1e-3f, ratio);
+    std::vector<cv::Mat> channels;
+    cv::split(src_f, channels);
+    for (auto& channel : channels) {
+        channel = channel.mul(ratio);
+    }
+    cv::Mat restored;
+    cv::merge(channels, restored);
+    restored.convertTo(restored, CV_8UC3);
+    return restored;
+}
+
 cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     if (face.empty() || face.cols <= 0 || face.rows <= 0) {
         return face;
@@ -236,7 +313,10 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         cv::Mat gray_work;
         cv::cvtColor(work, gray_work, cv::COLOR_BGR2GRAY);
         double angle = estimate_blur_angle_deg(gray_work);
-        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 11 : 9, 0.16f + 0.10f * blur_severity);
+        if (blur_severity > 0.62f) {
+            work = apply_motion_wiener_restore_bgr(work, angle, 13, 3.5f);
+        }
+        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 11 : 9, 0.18f + 0.12f * blur_severity);
         directional_face.convertTo(enhanced_f, CV_32FC3);
 
         cv::Mat kernel = cv::getGaborKernel(cv::Size(7, 7), 1.8, angle * CV_PI / 180.0, 4.5, 0.9, 0.0, CV_32F);
@@ -247,7 +327,7 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
         std::vector<cv::Mat> channels;
         cv::split(enhanced_f, channels);
         for (auto& channel : channels) {
-            channel += directional * 0.025f;
+            channel += directional * 0.030f;
         }
         cv::merge(channels, enhanced_f);
     }
@@ -256,9 +336,9 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     enhanced_f.convertTo(enhanced, CV_8UC3);
 
     cv::Mat blur;
-    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.60 + 0.12 * blur_severity);
+    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.55 + 0.10 * blur_severity);
     cv::Mat out;
-    float unsharp_amount = 0.10f + 0.05f * blur_severity;
+    float unsharp_amount = 0.11f + 0.04f * blur_severity;
     cv::addWeighted(enhanced, 1.0f + unsharp_amount, blur, -unsharp_amount, 0, out);
 
     cv::Mat gray_out;
@@ -310,7 +390,10 @@ cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
 
     if (blur_severity > 0.38f) {
         double angle = estimate_blur_angle_deg(gray_in);
-        cv::Mat directional_person = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 13 : 11, 0.12f + 0.08f * blur_severity);
+        if (blur_severity > 0.65f) {
+            work = apply_motion_wiener_restore_bgr(work, angle, 15, 3.0f);
+        }
+        cv::Mat directional_person = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 13 : 11, 0.14f + 0.10f * blur_severity);
         directional_person.convertTo(enhanced_f, CV_32FC3);
         cv::Mat kernel = cv::getGaborKernel(cv::Size(9, 9), 2.0, angle * CV_PI / 180.0, 5.5, 0.9, 0.0, CV_32F);
         cv::Mat directional;
@@ -320,7 +403,7 @@ cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
         std::vector<cv::Mat> channels;
         cv::split(enhanced_f, channels);
         for (auto& channel : channels) {
-            channel += directional * 0.018f;
+            channel += directional * 0.022f;
         }
         cv::merge(channels, enhanced_f);
     }

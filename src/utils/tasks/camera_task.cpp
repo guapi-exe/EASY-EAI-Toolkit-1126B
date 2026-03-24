@@ -580,9 +580,9 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         float yaw = std::fabs((best_face.landmarks[2].x - eye_center_x) / dx);
                                         bool frontal_ok = isFrontalFace(best_face.landmarks);
                                         bool frontal_relaxed_ok = frontal_ok ||
-                                            (roll < 22.0f && yaw < 0.28f && best_face.score >= 0.60f && face_edge_occlusion < 0.35f);
+                                            (roll < 24.0f && yaw < 0.32f && best_face.score >= 0.58f && face_edge_occlusion < 0.40f);
                                         bool weak_frontal_ok = frontal_relaxed_ok ||
-                                            (roll < 28.0f && yaw < 0.42f && best_face.score >= CAPTURE_MIN_FACE_SCORE && face_edge_occlusion < 0.60f);
+                                            (roll < 32.0f && yaw < 0.48f && best_face.score >= CAPTURE_MIN_FACE_SCORE && face_edge_occlusion < 0.72f);
                                         double current_clarity = computeFocusMeasure(job.personRoi(base_fbox));
                                         bool strong_candidate_ok =
                                             (!CAPTURE_REQUIRE_FRONTAL_FACE || frontal_relaxed_ok) &&
