@@ -621,13 +621,16 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                 if (crop_min_margin >= required_crop_margin) {
                                                     Mat face_aligned = job.personRoi(fbox).clone();
                                                     int upper_body_w = std::min(job.personRoi.cols,
-                                                        std::max(static_cast<int>(base_fbox.width * 4.2f), static_cast<int>(job.personRoi.cols * 0.72f)));
+                                                        std::max(static_cast<int>(base_fbox.width * CAPTURE_UPPER_BODY_WIDTH_FACE_RATIO),
+                                                                 static_cast<int>(job.personRoi.cols * CAPTURE_UPPER_BODY_MIN_WIDTH_RATIO)));
                                                     int upper_body_h = std::min(job.personRoi.rows,
-                                                        std::max(static_cast<int>(base_fbox.height * 5.6f), static_cast<int>(job.personRoi.rows * 0.78f)));
+                                                        std::max(static_cast<int>(base_fbox.height * CAPTURE_UPPER_BODY_HEIGHT_FACE_RATIO),
+                                                                 static_cast<int>(job.personRoi.rows * CAPTURE_UPPER_BODY_MIN_HEIGHT_RATIO)));
                                                     int upper_body_cx = base_fbox.x + base_fbox.width / 2;
-                                                    int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * 1.45f);
+                                                    int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * CAPTURE_UPPER_BODY_CENTER_Y_RATIO);
                                                     int upper_body_x = std::max(0, std::min(job.personRoi.cols - upper_body_w, upper_body_cx - upper_body_w / 2));
-                                                    int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h, upper_body_cy - upper_body_h / 3));
+                                                    int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h,
+                                                        upper_body_cy - static_cast<int>(upper_body_h / CAPTURE_UPPER_BODY_TOP_DIVISOR)));
                                                     cv::Rect upper_body_box(
                                                         upper_body_x,
                                                         upper_body_y,
