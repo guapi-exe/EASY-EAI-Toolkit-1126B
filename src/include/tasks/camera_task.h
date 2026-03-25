@@ -52,6 +52,7 @@ private:
     void candidateEvalLoop(rknn_context faceCtx);
     bool enqueueCandidateEvaluation(CandidateEvalJob job);
     double computeFocusMeasure(const cv::Mat& img);
+    float computeMotionBlurSeverity(const cv::Mat& img);
     bool isFrontalFace(const std::vector<cv::Point2f>& landmarks);
     bool isSideFace(const std::vector<cv::Point2f>& landmarks);
     void logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail);

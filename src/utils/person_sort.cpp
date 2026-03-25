@@ -189,6 +189,7 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
     double best_score = -1e12;
     float best_occlusion = 1e6f;
     float best_motion = 1e6f;
+    float best_blur = 1e6f;
     double best_clarity = -1e12;
 
     auto occlusion_of = [](const Track::FrameData& frame) {
@@ -202,17 +203,21 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
         }
 
         float frame_occlusion = occlusion_of(frame);
-        bool clearly_lower_motion = frame.motion_ratio < best_motion - 0.003f;
-        bool similar_motion = std::fabs(frame.motion_ratio - best_motion) <= 0.003f;
+        bool clearly_lower_blur = frame.blur_severity < best_blur - 0.05f;
+        bool similar_blur = std::fabs(frame.blur_severity - best_blur) <= 0.05f;
+        bool clearly_lower_motion = similar_blur && frame.motion_ratio < best_motion - 0.003f;
+        bool similar_motion = similar_blur && std::fabs(frame.motion_ratio - best_motion) <= 0.003f;
 
         if (frame.is_frontal) {
             if (!found_frontal ||
-                clearly_lower_motion ||
+                clearly_lower_blur ||
+                (similar_blur && clearly_lower_motion) ||
                 (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
                 (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
                 (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.yaw_abs < best_yaw - 1e-6f) ||
                 (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
                 found_frontal = true;
+                best_blur = frame.blur_severity;
                 best_occlusion = frame_occlusion;
                 best_motion = frame.motion_ratio;
                 best_clarity = frame.clarity;
@@ -222,10 +227,12 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
             }
         } else if (!found_frontal) {
             if (best_index == SIZE_MAX ||
-                clearly_lower_motion ||
+                clearly_lower_blur ||
+                (similar_blur && clearly_lower_motion) ||
                 (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
                 (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
                 (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.score > best_score)) {
+                best_blur = frame.blur_severity;
                 best_occlusion = frame_occlusion;
                 best_motion = frame.motion_ratio;
                 best_clarity = frame.clarity;
@@ -517,12 +524,13 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         for (const auto& upload : pendingUploads) {
             upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
             upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
-            log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 综合评分: %.2f)",
+            log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 模糊度: %.2f, 综合评分: %.2f)",
                      upload.trackId,
                      upload.bestFrame.clarity,
                      upload.bestFrame.area_ratio * 100,
                      upload.occlusion,
                      upload.bestFrame.motion_ratio,
+                     upload.bestFrame.blur_severity,
                      upload.bestFrame.score);
         }
         return snapshot;
@@ -638,12 +646,13 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     for (const auto& upload : pendingUploads) {
         upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
         upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
-        log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 综合评分: %.2f)",
+        log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 模糊度: %.2f, 综合评分: %.2f)",
                  upload.trackId,
                  upload.bestFrame.clarity,
                  upload.bestFrame.area_ratio * 100,
                  upload.occlusion,
                  upload.bestFrame.motion_ratio,
+                 upload.bestFrame.blur_severity,
                  upload.bestFrame.score);
     }
 

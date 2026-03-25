@@ -49,6 +49,7 @@ struct Track {
         float person_occlusion;
         float face_edge_occlusion;
         float motion_ratio;
+        float blur_severity;
     };
     std::vector<FrameData> frame_candidates; // 候选帧数据
 };

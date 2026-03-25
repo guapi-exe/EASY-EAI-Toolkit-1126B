@@ -322,6 +322,71 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     return stddev_val.val[0] * stddev_val.val[0];
 }
 
+// -------------------- 图像级运动模糊检测 --------------------
+float CameraTask::computeMotionBlurSeverity(const Mat& img) {
+    if (img.empty() || img.cols < 16 || img.rows < 16) return 1.0f;
+
+    Mat gray;
+    if (img.channels() == 3) {
+        cvtColor(img, gray, COLOR_BGR2GRAY);
+    } else {
+        gray = img;
+    }
+
+    // 缩小到合理尺寸以加快计算
+    if (std::max(gray.cols, gray.rows) > 200) {
+        float scale = 200.0f / std::max(gray.cols, gray.rows);
+        resize(gray, gray, Size(), scale, scale, INTER_AREA);
+    }
+
+    // 1. 计算X/Y方向梯度能量
+    Mat gx, gy;
+    Sobel(gray, gx, CV_32F, 1, 0, 3);
+    Sobel(gray, gy, CV_32F, 0, 1, 3);
+
+    Scalar gx_mean, gx_std, gy_mean, gy_std;
+    meanStdDev(gx, gx_mean, gx_std);
+    meanStdDev(gy, gy_mean, gy_std);
+
+    double energy_x = gx_std.val[0] * gx_std.val[0];
+    double energy_y = gy_std.val[0] * gy_std.val[0];
+    double total_energy = energy_x + energy_y;
+
+    if (total_energy < 1.0) return 1.0f;
+
+    // 方向不均衡度：若某一方向梯度远强于另一方向，说明运动模糊
+    double dir_ratio = std::min(energy_x, energy_y) / (std::max(energy_x, energy_y) + 1e-6);
+    float dir_severity = std::max(0.0f, std::min(1.0f, (float)(1.0 - dir_ratio)));
+
+    // 2. Laplacian方差 - 综合锐度
+    Mat lap;
+    Laplacian(gray, lap, CV_32F);
+    Scalar lap_mean_val, lap_std_val;
+    meanStdDev(lap, lap_mean_val, lap_std_val);
+    double lap_var = lap_std_val.val[0] * lap_std_val.val[0];
+    float sharpness_severity = std::max(0.0f, std::min(1.0f, (float)((200.0 - lap_var) / 200.0)));
+
+    // 3. 自相似移位差分 - 运动模糊拖影检测
+    // 沿估计的主梯度方向移位2像素，运动模糊图像移位后差异小
+    double angle = std::atan2(gy_mean.val[0], gx_mean.val[0]);
+    int dx = static_cast<int>(std::round(std::cos(angle) * 2.0));
+    int dy = static_cast<int>(std::round(std::sin(angle) * 2.0));
+    if (dx == 0 && dy == 0) dx = 1;
+
+    Mat shifted;
+    Mat transform_mat = (Mat_<double>(2, 3) << 1, 0, dx, 0, 1, dy);
+    warpAffine(gray, shifted, transform_mat, gray.size(), INTER_LINEAR, BORDER_REPLICATE);
+    Mat diff;
+    absdiff(gray, shifted, diff);
+    double shift_diff = mean(diff).val[0];
+    // 移位差分越小 = 自相关越高 = 运动模糊拖影越严重
+    float trail_severity = std::max(0.0f, std::min(1.0f, (float)((16.0 - shift_diff) / 16.0)));
+
+    // 组合
+    float severity = dir_severity * 0.25f + sharpness_severity * 0.45f + trail_severity * 0.30f;
+    return std::max(0.0f, std::min(1.0f, severity));
+}
+
 bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     if (landmarks.size() != 5) return false;
     cv::Point2f left_eye = landmarks[0];
@@ -584,13 +649,16 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         bool weak_frontal_ok = frontal_relaxed_ok ||
                                             (roll < 32.0f && yaw < 0.48f && best_face.score >= CAPTURE_MIN_FACE_SCORE && face_edge_occlusion < 0.72f);
                                         double current_clarity = computeFocusMeasure(job.personRoi(base_fbox));
+                                        float current_blur_severity = computeMotionBlurSeverity(job.personRoi(base_fbox));
                                         bool strong_candidate_ok =
                                             (!CAPTURE_REQUIRE_FRONTAL_FACE || frontal_relaxed_ok) &&
                                             current_clarity > CAPTURE_MIN_CLARITY &&
+                                            current_blur_severity < CAPTURE_MAX_BLUR_SEVERITY &&
                                             yaw < CAPTURE_MAX_YAW;
                                         bool fallback_candidate_ok =
                                             (!CAPTURE_REQUIRE_FRONTAL_FACE || weak_frontal_ok) &&
                                             current_clarity > CAPTURE_FALLBACK_MIN_CLARITY &&
+                                            current_blur_severity < CAPTURE_FALLBACK_MAX_BLUR_SEVERITY &&
                                             yaw < CAPTURE_FALLBACK_MAX_YAW &&
                                             face_edge_occlusion < CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION;
 
@@ -663,6 +731,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
                                                     float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
                                                     float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, CAPTURE_MAX_MOTION_RATIO));
+                                                    float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, CAPTURE_MAX_BLUR_SEVERITY));
                                                     float candidate_penalty = strong_candidate_ok ? 0.0f : CAPTURE_FALLBACK_SCORE_PENALTY;
 
                                                     Track::FrameData frame_data;
@@ -671,6 +740,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                                        area_score * 1000 * area_weight -
                                                                        occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
                                                                        motion_penalty * CAPTURE_MOTION_SCORE_PENALTY -
+                                                                       blur_severity_penalty * CAPTURE_BLUR_SEVERITY_SCORE_PENALTY -
                                                                        candidate_penalty;
                                                     frame_data.person_roi = person_aligned;
                                                     frame_data.face_roi = face_aligned;
@@ -682,6 +752,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     frame_data.person_occlusion = job.personOcclusion;
                                                     frame_data.face_edge_occlusion = face_edge_occlusion;
                                                     frame_data.motion_ratio = job.motionRatio;
+                                                    frame_data.blur_severity = current_blur_severity;
                                                     add_frame_candidate(job.trackId, frame_data);
                                                     clearTrackReject("eval", job.trackId);
 
@@ -710,18 +781,21 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         } else {
                                             char detail[256];
                                             std::snprintf(detail, sizeof(detail),
-                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f",
+                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f blur=%.2f",
                                                           frontal_ok ? 1 : 0,
                                                           frontal_relaxed_ok ? 1 : 0,
                                                           weak_frontal_ok ? 1 : 0,
                                                           yaw,
                                                           current_clarity,
-                                                          face_edge_occlusion);
+                                                          face_edge_occlusion,
+                                                          current_blur_severity);
                                             const char* reason = "quality_gate";
                                             if (CAPTURE_REQUIRE_FRONTAL_FACE && !weak_frontal_ok) {
                                                 reason = "non_frontal";
                                             } else if (current_clarity <= CAPTURE_FALLBACK_MIN_CLARITY) {
                                                 reason = "clarity_low";
+                                            } else if (current_blur_severity >= CAPTURE_FALLBACK_MAX_BLUR_SEVERITY) {
+                                                reason = "motion_blur";
                                             } else if (yaw >= CAPTURE_FALLBACK_MAX_YAW) {
                                                 reason = "yaw_large";
                                             } else if (face_edge_occlusion >= CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION) {

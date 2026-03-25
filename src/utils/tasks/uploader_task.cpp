@@ -515,7 +515,7 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
 
     if (blur_severity > 0.40f) {
         cv::Mat denoised;
-        cv::bilateralFilter(work, denoised, 5, 24, 12);
+        cv::bilateralFilter(work, denoised, 5, 20, 10);
         work = denoised;
     }
 
@@ -534,30 +534,30 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     cv::Mat work_f;
     work.convertTo(work_f, CV_32FC3);
     cv::Mat base_f;
-    cv::GaussianBlur(work_f, base_f, cv::Size(0, 0), 0.75 + 0.20 * blur_severity);
+    cv::GaussianBlur(work_f, base_f, cv::Size(0, 0), 0.75 + 0.15 * blur_severity);
     cv::Mat detail_f = work_f - base_f;
-    float detail_gain = 0.12f + 0.08f * blur_severity;
+    float detail_gain = 0.08f + 0.05f * blur_severity;
     cv::Mat enhanced_f = work_f + detail_f * detail_gain;
 
-    if (blur_severity > 0.35f) {
+    if (blur_severity > 0.40f) {
         cv::Mat gray_work;
         cv::cvtColor(work, gray_work, cv::COLOR_BGR2GRAY);
         double angle = estimate_blur_angle_deg(gray_work);
-        if (blur_severity > 0.62f) {
-            work = apply_motion_wiener_restore_bgr(work, angle, 13, 3.5f);
+        if (blur_severity > 0.68f) {
+            work = apply_motion_wiener_restore_bgr(work, angle, 9, 6.0f);
         }
-        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 11 : 9, 0.10f + 0.08f * blur_severity);
+        cv::Mat directional_face = apply_directional_unsharp(work, angle, blur_severity > 0.70f ? 9 : 7, 0.06f + 0.04f * blur_severity);
         directional_face.convertTo(enhanced_f, CV_32FC3);
 
         cv::Mat kernel = cv::getGaborKernel(cv::Size(7, 7), 1.8, angle * CV_PI / 180.0, 4.5, 0.9, 0.0, CV_32F);
         cv::Mat directional;
         cv::filter2D(gray_work, directional, CV_32F, kernel);
-        cv::normalize(directional, directional, -10.0f, 10.0f, cv::NORM_MINMAX);
+        cv::normalize(directional, directional, -6.0f, 6.0f, cv::NORM_MINMAX);
 
         std::vector<cv::Mat> channels;
         cv::split(enhanced_f, channels);
         for (auto& channel : channels) {
-            channel += directional * 0.018f;
+            channel += directional * 0.012f;
         }
         cv::merge(channels, enhanced_f);
     }
@@ -567,9 +567,9 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     enhanced = compress_face_highlights(enhanced);
 
     cv::Mat blur;
-    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.70 + 0.12 * blur_severity);
+    cv::GaussianBlur(enhanced, blur, cv::Size(0, 0), 0.70 + 0.08 * blur_severity);
     cv::Mat out;
-    float unsharp_amount = 0.06f + 0.03f * blur_severity;
+    float unsharp_amount = 0.04f + 0.02f * blur_severity;
     cv::addWeighted(enhanced, 1.0f + unsharp_amount, blur, -unsharp_amount, 0, out);
     out = suppress_halo_artifacts(work, out);
 
@@ -578,7 +578,7 @@ cv::Mat motion_deblur_enhance_face(const cv::Mat& face) {
     double mean_luma_after = cv::mean(gray_out)[0];
     if (mean_luma_after > 1e-3) {
         double gain = mean_luma_before / mean_luma_after;
-        gain = std::max(0.92, std::min(1.03, gain));
+        gain = std::max(0.94, std::min(1.02, gain));
         out.convertTo(out, -1, gain, 0);
     }
 
@@ -599,12 +599,12 @@ cv::Mat opencv_superres_deblur_face(const cv::Mat& face) {
     double focus = compute_laplacian_variance(gray);
     float severity = static_cast<float>(std::max(0.0, std::min(1.0, (220.0 - focus) / 220.0)));
 
-    if (severity > 0.28f) {
-        deblurred = apply_motion_wiener_restore_bgr(deblurred, angle, severity > 0.60f ? 15 : 11, 3.8f);
+    if (severity > 0.35f) {
+        deblurred = apply_motion_wiener_restore_bgr(deblurred, angle, severity > 0.65f ? 11 : 9, 5.5f);
     }
 
-    cv::Mat final_face = apply_directional_unsharp(deblurred, angle, severity > 0.55f ? 11 : 9, 0.08f + 0.06f * severity);
-    final_face = apply_unsharp_mask(final_face, 0.75, 0.06f);
+    cv::Mat final_face = apply_directional_unsharp(deblurred, angle, severity > 0.60f ? 9 : 7, 0.05f + 0.04f * severity);
+    final_face = apply_unsharp_mask(final_face, 0.75, 0.04f);
     final_face = compress_face_highlights(final_face);
     final_face = suppress_halo_artifacts(sr, final_face);
     return final_face;
@@ -622,12 +622,12 @@ cv::Mat deghost_motion_face(const cv::Mat& face) {
     double angle = estimate_blur_angle_deg(gray);
     float severity = static_cast<float>(std::max(0.0, std::min(1.0, (235.0 - focus) / 235.0)));
 
-    cv::Mat restored = apply_motion_wiener_restore_bgr(work, angle, severity > 0.65f ? 17 : 13, 4.6f);
-    if (severity > 0.45f) {
-        restored = apply_motion_wiener_restore_bgr(restored, angle, severity > 0.72f ? 13 : 11, 5.2f);
+    cv::Mat restored = apply_motion_wiener_restore_bgr(work, angle, severity > 0.65f ? 13 : 9, 6.5f);
+    if (severity > 0.55f) {
+        restored = apply_motion_wiener_restore_bgr(restored, angle, severity > 0.72f ? 11 : 9, 7.0f);
     }
 
-    cv::Mat directional = apply_directional_unsharp(restored, angle, severity > 0.55f ? 9 : 7, 0.05f + 0.04f * severity);
+    cv::Mat directional = apply_directional_unsharp(restored, angle, severity > 0.60f ? 7 : 5, 0.03f + 0.03f * severity);
     cv::Mat blended;
     cv::addWeighted(restored, 0.76, directional, 0.24, 0, blended);
 
@@ -689,12 +689,12 @@ cv::Mat motion_deblur_enhance_person(const cv::Mat& person) {
     float detail_gain = 0.08f + 0.06f * blur_severity;
     cv::Mat enhanced_f = work_f + detail_f * detail_gain;
 
-    if (blur_severity > 0.38f) {
+    if (blur_severity > 0.45f) {
         double angle = estimate_blur_angle_deg(gray_in);
-        if (blur_severity > 0.65f) {
-            work = apply_motion_wiener_restore_bgr(work, angle, 15, 3.0f);
+        if (blur_severity > 0.70f) {
+            work = apply_motion_wiener_restore_bgr(work, angle, 11, 5.0f);
         }
-        cv::Mat directional_person = apply_directional_unsharp(work, angle, blur_severity > 0.65f ? 13 : 11, 0.14f + 0.10f * blur_severity);
+        cv::Mat directional_person = apply_directional_unsharp(work, angle, blur_severity > 0.70f ? 11 : 9, 0.08f + 0.06f * blur_severity);
         directional_person.convertTo(enhanced_f, CV_32FC3);
         cv::Mat kernel = cv::getGaborKernel(cv::Size(9, 9), 2.0, angle * CV_PI / 180.0, 5.5, 0.9, 0.0, CV_32F);
         cv::Mat directional;
@@ -831,67 +831,81 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
 
     cv::Mat processed = img;
     if (type == "face") {
-        cv::Mat classic_face = motion_deblur_enhance_face(img);
-        cv::Mat sr_face = opencv_super_resolve_face(img);
-        cv::Mat sr_deblur_face = opencv_superres_deblur_face(img);
-        cv::Mat deghost_face = opencv_aggressive_deghost_face(img);
-
         double base_focus = compute_focus_measure_bgr(img);
         double base_luma = compute_luma_mean_bgr(img);
         double base_gradient = compute_gradient_energy_bgr(img);
-        double classic_score = score_face_candidate(classic_face, base_focus, base_luma, base_gradient, 8.0);
-        double sr_score = score_face_candidate(sr_face, base_focus, base_luma, base_gradient, 18.0);
-        double sr_deblur_score = score_face_candidate(sr_deblur_face, base_focus, base_luma, base_gradient, 24.0);
-        double deghost_score = score_face_candidate(deghost_face, base_focus, base_luma, base_gradient, 28.0);
-
         int short_edge = std::min(img.cols, img.rows);
         double blur_severity = std::max(0.0, std::min(1.0, (220.0 - base_focus) / 220.0));
 
-        processed = classic_face;
-        const char* best_mode = "classic";
-        double best_score = classic_score;
+        const char* best_mode = "none";
+        double best_score = 0.0;
 
-        if (blur_severity > 0.72 || short_edge < 120) {
-            processed = deghost_face;
-            best_score = deghost_score;
-            best_mode = "opencv_deghost_forced";
-        } else if (blur_severity > 0.48 || short_edge < 160) {
-            processed = sr_deblur_face;
-            best_score = sr_deblur_score;
-            best_mode = "opencv_sr_deblur_forced";
-            if (deghost_score > sr_deblur_score + 18.0) {
-                processed = deghost_face;
-                best_score = deghost_score;
-                best_mode = "opencv_deghost_preferred";
+        if (blur_severity < 0.18 && short_edge >= 200) {
+            // 已经足够清晰 - 仅做轻微锐化和尺寸调整
+            processed = upscale_small_face(img);
+            processed = apply_unsharp_mask(processed, 0.8, 0.04f);
+            best_mode = "sharp_passthrough";
+            best_score = base_focus;
+            log_debug("UploaderTask: face already sharp, skip heavy processing. focus=%.1f blur=%.2f short=%d",
+                      base_focus, blur_severity, short_edge);
+        } else if (blur_severity < 0.40) {
+            // 轻度模糊 - 仅使用classic轻增强
+            cv::Mat classic_face = motion_deblur_enhance_face(img);
+            double classic_score = score_face_candidate(classic_face, base_focus, base_luma, base_gradient, 8.0);
+            // 如果classic反而更差（产生了伪影），用原图+轻锐化
+            if (classic_score < -20.0) {
+                processed = upscale_small_face(img);
+                processed = apply_unsharp_mask(processed, 0.75, 0.05f);
+                best_mode = "light_unsharp";
+                best_score = base_focus;
+            } else {
+                processed = classic_face;
+                best_mode = "classic";
+                best_score = classic_score;
             }
+            log_debug("UploaderTask: light blur face. focus=%.1f blur=%.2f short=%d mode=%s score=%.1f",
+                      base_focus, blur_severity, short_edge, best_mode, best_score);
         } else {
+            // 中度/重度模糊 - 使用多路对比，但排除最激进的方法
+            cv::Mat classic_face = motion_deblur_enhance_face(img);
+            cv::Mat sr_face = opencv_super_resolve_face(img);
+            double classic_score = score_face_candidate(classic_face, base_focus, base_luma, base_gradient, 8.0);
+            double sr_score = score_face_candidate(sr_face, base_focus, base_luma, base_gradient, 18.0);
+
+            processed = classic_face;
+            best_mode = "classic";
+            best_score = classic_score;
+
             if (sr_score > best_score) {
                 processed = sr_face;
                 best_score = sr_score;
                 best_mode = "opencv_sr";
             }
-            if (sr_deblur_score > best_score) {
-                processed = sr_deblur_face;
-                best_score = sr_deblur_score;
-                best_mode = "opencv_sr_deblur";
-            }
-            if (deghost_score > best_score) {
-                processed = deghost_face;
-                best_score = deghost_score;
-                best_mode = "opencv_deghost";
-            }
-        }
 
-        log_debug("UploaderTask: OpenCV face compare short=%d blur=%.2f base_focus=%.1f classic=%.1f sr=%.1f sr_deblur=%.1f deghost=%.1f use=%s best=%.1f",
-                  short_edge,
-                  blur_severity,
-                  base_focus,
-                  classic_score,
-                  sr_score,
-                  sr_deblur_score,
-                  deghost_score,
-                  best_mode,
-                  best_score);
+            // 仅在严重模糊时才启用deblur/deghost流水线
+            if (blur_severity > 0.58 || short_edge < 140) {
+                cv::Mat sr_deblur_face = opencv_superres_deblur_face(img);
+                double sr_deblur_score = score_face_candidate(sr_deblur_face, base_focus, base_luma, base_gradient, 20.0);
+                if (sr_deblur_score > best_score) {
+                    processed = sr_deblur_face;
+                    best_score = sr_deblur_score;
+                    best_mode = "opencv_sr_deblur";
+                }
+
+                if (blur_severity > 0.72 || short_edge < 120) {
+                    cv::Mat deghost_face = opencv_aggressive_deghost_face(img);
+                    double deghost_score = score_face_candidate(deghost_face, base_focus, base_luma, base_gradient, 22.0);
+                    if (deghost_score > best_score) {
+                        processed = deghost_face;
+                        best_score = deghost_score;
+                        best_mode = "opencv_deghost";
+                    }
+                }
+            }
+
+            log_debug("UploaderTask: blurry face. focus=%.1f blur=%.2f short=%d mode=%s score=%.1f",
+                      base_focus, blur_severity, short_edge, best_mode, best_score);
+        }
     } else if (type == "person") {
         processed = motion_deblur_enhance_person(img);
     }
