@@ -322,11 +322,28 @@ double score_face_candidate(const cv::Mat& candidate,
     double focus = compute_focus_measure_bgr(candidate);
     double luma = compute_luma_mean_bgr(candidate);
     double gradient = compute_gradient_energy_bgr(candidate);
-    double ghost_penalty = compute_ghost_penalty_bgr(candidate);
-    double luma_penalty = std::fabs(luma - base_luma) * 1.8;
-    double oversoften_penalty = std::max(0.0, base_focus * 0.90 - focus) * 0.9;
-    double gradient_bonus = std::max(0.0, gradient - base_gradient * 0.92) * 0.32;
-    return focus + gradient_bonus - luma_penalty - oversoften_penalty - ghost_penalty + scale_bonus;
+    double ghost_penalty = compute_ghost_penalty_bgr(candidate) * 6.0;
+
+    double focus_gain = (focus - base_focus) / std::max(80.0, base_focus);
+    double gradient_gain = (gradient - base_gradient) / std::max(12.0, base_gradient);
+    double luma_penalty = std::fabs(luma - base_luma) * 2.4;
+    double oversoften_penalty =
+        std::max(0.0, base_focus * 0.95 - focus) / std::max(20.0, base_focus) * 480.0;
+
+    double score = focus_gain * 900.0 +
+                   gradient_gain * 260.0 -
+                   luma_penalty -
+                   oversoften_penalty -
+                   ghost_penalty +
+                   scale_bonus * 22.0;
+
+    if (focus >= base_focus * 1.03) {
+        score += 35.0;
+    }
+    if (gradient >= base_gradient * 1.05) {
+        score += 18.0;
+    }
+    return score;
 }
 
 cv::Mat upscale_small_face(const cv::Mat& face) {
@@ -827,33 +844,54 @@ std::string UploaderTask::uploadHttp(const cv::Mat& img,
         double sr_deblur_score = score_face_candidate(sr_deblur_face, base_focus, base_luma, base_gradient, 24.0);
         double deghost_score = score_face_candidate(deghost_face, base_focus, base_luma, base_gradient, 28.0);
 
+        int short_edge = std::min(img.cols, img.rows);
+        double blur_severity = std::max(0.0, std::min(1.0, (220.0 - base_focus) / 220.0));
+
         processed = classic_face;
         const char* best_mode = "classic";
         double best_score = classic_score;
 
-        if (sr_score > best_score) {
-            processed = sr_face;
-            best_score = sr_score;
-            best_mode = "opencv_sr";
-        }
-        if (sr_deblur_score > best_score) {
-            processed = sr_deblur_face;
-            best_score = sr_deblur_score;
-            best_mode = "opencv_sr_deblur";
-        }
-        if (deghost_score > best_score) {
+        if (blur_severity > 0.72 || short_edge < 120) {
             processed = deghost_face;
             best_score = deghost_score;
-            best_mode = "opencv_deghost";
+            best_mode = "opencv_deghost_forced";
+        } else if (blur_severity > 0.48 || short_edge < 160) {
+            processed = sr_deblur_face;
+            best_score = sr_deblur_score;
+            best_mode = "opencv_sr_deblur_forced";
+            if (deghost_score > sr_deblur_score + 18.0) {
+                processed = deghost_face;
+                best_score = deghost_score;
+                best_mode = "opencv_deghost_preferred";
+            }
+        } else {
+            if (sr_score > best_score) {
+                processed = sr_face;
+                best_score = sr_score;
+                best_mode = "opencv_sr";
+            }
+            if (sr_deblur_score > best_score) {
+                processed = sr_deblur_face;
+                best_score = sr_deblur_score;
+                best_mode = "opencv_sr_deblur";
+            }
+            if (deghost_score > best_score) {
+                processed = deghost_face;
+                best_score = deghost_score;
+                best_mode = "opencv_deghost";
+            }
         }
 
-        log_debug("UploaderTask: OpenCV face compare base=%.1f classic=%.1f sr=%.1f sr_deblur=%.1f deghost=%.1f use=%s",
+        log_debug("UploaderTask: OpenCV face compare short=%d blur=%.2f base_focus=%.1f classic=%.1f sr=%.1f sr_deblur=%.1f deghost=%.1f use=%s best=%.1f",
+                  short_edge,
+                  blur_severity,
                   base_focus,
                   classic_score,
                   sr_score,
                   sr_deblur_score,
                   deghost_score,
-                  best_mode);
+                  best_mode,
+                  best_score);
     } else if (type == "person") {
         processed = motion_deblur_enhance_person(img);
     }
