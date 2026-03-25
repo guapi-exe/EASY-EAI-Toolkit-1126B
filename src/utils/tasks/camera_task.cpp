@@ -5,6 +5,11 @@
 #include "sort_tracker.h"
 #include <fstream>
 #include <cstdio>
+#include <dirent.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
 extern "C" {
 #include "log.h"
 #include "camera.h"
@@ -141,7 +146,60 @@ double computeSceneBrightnessFast(const cv::Mat& frame) {
 
     return cv::mean(gray)[0];
 }
+
+// ─── 软件亮度补偿 ──────────────────────────────────────────────
+// 当 ISP 输出偏暗（filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD）时，
+// 用 Gamma + linear gain 将画面提亮。Gamma 比纯线性更好：暗部拉得多、亮部不过曝。
+// 每帧只在需要时执行，性能开销约 3-4 ms（2688x1520 BGR, RK3568 A55）。
+static cv::Mat g_gammaLUT;
+static double  g_gammaLUT_gamma = -1.0;
+
+static void buildGammaLUT(double gamma) {
+    if (std::fabs(gamma - g_gammaLUT_gamma) < 1e-6 && !g_gammaLUT.empty()) {
+        return; // 已缓存
+    }
+    cv::Mat lut(1, 256, CV_8UC1);
+    uchar* p = lut.ptr();
+    for (int i = 0; i < 256; i++) {
+        p[i] = cv::saturate_cast<uchar>(std::pow(i / 255.0, gamma) * 255.0);
+    }
+    g_gammaLUT = lut;
+    g_gammaLUT_gamma = gamma;
 }
+
+// 返回 true 表示实际做了提亮
+static bool applyBrightnessBoost(cv::Mat& frame, double currentBrightness) {
+    if (currentBrightness >= CAMERA_BRIGHTNESS_BOOST_THRESHOLD || currentBrightness < 1.0) {
+        return false;
+    }
+    double ratio = CAMERA_BRIGHTNESS_TARGET / currentBrightness;
+    double alpha = std::min(ratio, CAMERA_BRIGHTNESS_MAX_ALPHA);
+    double beta  = std::min((CAMERA_BRIGHTNESS_TARGET - currentBrightness) * 0.18,
+                            CAMERA_BRIGHTNESS_MAX_BETA);
+
+    // Gamma 校正：对暗部提升更温和，保留高光
+    double gamma = CAMERA_BRIGHTNESS_GAMMA;
+    // 亮度越暗，Gamma 越小（提升越多），但不低于 0.55
+    if (currentBrightness < 50.0) {
+        gamma = std::max(0.55, gamma - 0.12);
+    }
+    buildGammaLUT(gamma);
+    // cv::LUT 对多通道 Mat 自动逐通道应用单通道 LUT
+    cv::LUT(frame, g_gammaLUT, frame);
+
+    // 再叠加一层轻量线性增益补偿残差
+    if (alpha > 1.05 || beta > 2.0) {
+        // 做 Gamma 后重新测量均值以调低残差增益
+        double afterGamma = cv::mean(frame)[0]; // 粗略（BGR 均值非亮度，但够用）
+        if (afterGamma < CAMERA_BRIGHTNESS_TARGET && afterGamma > 1.0) {
+            double residualAlpha = std::min(CAMERA_BRIGHTNESS_TARGET / afterGamma, 1.45);
+            double residualBeta  = std::min((CAMERA_BRIGHTNESS_TARGET - afterGamma) * 0.10, 12.0);
+            frame.convertTo(frame, -1, residualAlpha, residualBeta);
+        }
+    }
+    return true;
+}
+} // namespace
 
 static float rect_iou(const cv::Rect& a, const cv::Rect& b) {
     int xx1 = std::max(a.x, b.x);
@@ -1080,12 +1138,21 @@ void CameraTask::captureLoop() {
             }
         }
 
+        // ─── 软件亮度补偿：基于滤波后亮度自动提亮偏暗画面 ───
+        bool boosted = false;
+        if (filteredBrightness > 0.0 && filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD) {
+            // frame 此时指向 buffer，先 clone 出来再提亮，避免修改 DMA 映射缓冲区
+            frame = frame.clone();
+            boosted = applyBrightnessBoost(frame, filteredBrightness);
+        }
+
         bool published = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             // 推理线程尚未消费上一帧时，直接丢弃当前帧，避免无效4K拷贝。
             if (latestFrameSeq == consumedFrameSeq) {
-                latestFrame = frame.clone();
+                // 若 boost 已 clone 过, 直接 move; 否则需 clone 保护 DMA buffer
+                latestFrame = boosted ? std::move(frame) : frame.clone();
                 latestFrameSeq++;
                 published = true;
             }
@@ -1099,12 +1166,13 @@ void CameraTask::captureLoop() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsWindowStart).count();
         if (elapsed >= 5) {
             double captureFps = static_cast<double>(captureFramesInWindow) / static_cast<double>(elapsed);
-            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s, black_th=%.1f",
+            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s, black_th=%.1f, boost=%s",
                      captureFps,
                      environmentBrightness.load(),
                      lastBrightnessRaw,
                      irCutModeToString(g_irCutMode),
-                     brightnessBlackThreshold.load());
+                     brightnessBlackThreshold.load(),
+                     boosted ? "ON" : "off");
             captureFpsWindowStart = now;
             captureFramesInWindow = 0;
         }

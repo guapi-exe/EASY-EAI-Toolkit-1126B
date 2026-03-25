@@ -492,4 +492,13 @@ int mipicamera_getframe(int camIndex, char *pbuf)
     }
 }
 
+int mipicamera_get_fd(int camIndex)
+{
+    mipi_camera_t *pCam = ptrCam(camIndex);
+    if(pCam){
+        return pCam->fd;
+    }
+    return -1;
+}
+
 

@@ -82,6 +82,7 @@ int mipicamera_init(int camIndex, int width, int height, int rot);
 void mipicamera_exit(int camIndex);
 int mipicamera_getframe(int camIndex, char *pbuf);
 void mipicamera_set_format(int camIndex, int format);
+int mipicamera_get_fd(int camIndex);
 
 #ifdef __cplusplus
 }

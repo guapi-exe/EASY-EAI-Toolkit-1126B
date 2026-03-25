@@ -81,3 +81,10 @@
 #define CAMERA_BRIGHTNESS_SAMPLE_INTERVAL  5
 #define CAMERA_BRIGHTNESS_WHITE_THRESHOLD  110.0
 #define CAMERA_BRIGHTNESS_BLACK_THRESHOLD   85.0
+
+// 软件亮度补偿参数（曝光不足时自动增益）
+#define CAMERA_BRIGHTNESS_TARGET           105.0   // 目标亮度均值
+#define CAMERA_BRIGHTNESS_BOOST_THRESHOLD   80.0   // 低于此值启动软件增益
+#define CAMERA_BRIGHTNESS_MAX_ALPHA          2.2    // 最大乘性增益（防止过曝/噪声放大）
+#define CAMERA_BRIGHTNESS_MAX_BETA          25.0    // 最大加性偏移（暗部抬升）
+#define CAMERA_BRIGHTNESS_GAMMA              0.85   // Gamma 校正指数（<1 提亮暗部、保留亮部）
