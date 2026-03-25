@@ -257,6 +257,8 @@ cv::Mat opencv_super_resolve_face(const cv::Mat& face) {
     return sr;
 }
 
+double estimate_blur_angle_deg(const cv::Mat& gray);
+
 double compute_gradient_energy_bgr(const cv::Mat& img) {
     if (img.empty()) {
         return 0.0;
