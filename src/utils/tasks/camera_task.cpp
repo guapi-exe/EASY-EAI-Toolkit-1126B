@@ -169,31 +169,34 @@ static void buildGammaLUT(double gamma) {
 
 // 返回 true 表示实际做了提亮
 static bool applyBrightnessBoost(cv::Mat& frame, double currentBrightness) {
-    if (currentBrightness >= CAMERA_BRIGHTNESS_BOOST_THRESHOLD || currentBrightness < 1.0) {
+    if (currentBrightness >= CAMERA_BRIGHTNESS_BOOST_THRESHOLD
+        || currentBrightness < CAMERA_BRIGHTNESS_BOOST_MIN_FLOOR) {
         return false;
     }
-    double ratio = CAMERA_BRIGHTNESS_TARGET / currentBrightness;
-    double alpha = std::min(ratio, CAMERA_BRIGHTNESS_MAX_ALPHA);
-    double beta  = std::min((CAMERA_BRIGHTNESS_TARGET - currentBrightness) * 0.18,
-                            CAMERA_BRIGHTNESS_MAX_BETA);
+
+    // ── 自适应目标：极暗场景不硬拉到满目标，限制噪声放大 ──
+    double effectiveTarget = CAMERA_BRIGHTNESS_TARGET;
+    if (currentBrightness < 55.0) {
+        // 亮度 42 → 目标 ≈ 76 而非 105，增益从 2.5x 降到 1.8x
+        effectiveTarget = currentBrightness
+            + (CAMERA_BRIGHTNESS_TARGET - currentBrightness) * CAMERA_BRIGHTNESS_DARK_BLEND;
+    }
 
     // Gamma 校正：对暗部提升更温和，保留高光
     double gamma = CAMERA_BRIGHTNESS_GAMMA;
-    // 亮度越暗，Gamma 越小（提升越多），但不低于 0.55
     if (currentBrightness < 50.0) {
-        gamma = std::max(0.55, gamma - 0.12);
+        gamma = std::max(0.60, gamma - 0.10);
     }
     buildGammaLUT(gamma);
     // cv::LUT 对多通道 Mat 自动逐通道应用单通道 LUT
     cv::LUT(frame, g_gammaLUT, frame);
 
-    // 再叠加一层轻量线性增益补偿残差
-    if (alpha > 1.05 || beta > 2.0) {
-        // 做 Gamma 后重新测量均值以调低残差增益
-        double afterGamma = cv::mean(frame)[0]; // 粗略（BGR 均值非亮度，但够用）
-        if (afterGamma < CAMERA_BRIGHTNESS_TARGET && afterGamma > 1.0) {
-            double residualAlpha = std::min(CAMERA_BRIGHTNESS_TARGET / afterGamma, 1.45);
-            double residualBeta  = std::min((CAMERA_BRIGHTNESS_TARGET - afterGamma) * 0.10, 12.0);
+    // Gamma 后测量残差，只在仍偏暗时施加轻量线性补偿
+    double afterGamma = cv::mean(frame)[0];
+    if (afterGamma < effectiveTarget && afterGamma > 1.0) {
+        double residualAlpha = std::min(effectiveTarget / afterGamma, 1.35);
+        double residualBeta  = std::min((effectiveTarget - afterGamma) * 0.10, 10.0);
+        if (residualAlpha > 1.03 || residualBeta > 1.5) {
             frame.convertTo(frame, -1, residualAlpha, residualBeta);
         }
     }
@@ -1138,21 +1141,17 @@ void CameraTask::captureLoop() {
             }
         }
 
-        // ─── 软件亮度补偿：基于滤波后亮度自动提亮偏暗画面 ───
-        bool boosted = false;
-        if (filteredBrightness > 0.0 && filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD) {
-            // frame 此时指向 buffer，先 clone 出来再提亮，避免修改 DMA 映射缓冲区
-            frame = frame.clone();
-            boosted = applyBrightnessBoost(frame, filteredBrightness);
-        }
-
+        // ─── 仅对实际推送给推理线程的帧做亮度补偿，丢弃帧跳过 ───
         bool published = false;
+        bool boosted = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            // 推理线程尚未消费上一帧时，直接丢弃当前帧，避免无效4K拷贝。
             if (latestFrameSeq == consumedFrameSeq) {
-                // 若 boost 已 clone 过, 直接 move; 否则需 clone 保护 DMA buffer
-                latestFrame = boosted ? std::move(frame) : frame.clone();
+                latestFrame = frame.clone();
+                if (filteredBrightness > CAMERA_BRIGHTNESS_BOOST_MIN_FLOOR
+                    && filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD) {
+                    boosted = applyBrightnessBoost(latestFrame, filteredBrightness);
+                }
                 latestFrameSeq++;
                 published = true;
             }
