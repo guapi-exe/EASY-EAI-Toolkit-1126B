@@ -168,22 +168,24 @@ static void buildGammaLUT(double gamma) {
 }
 
 // 返回 true 表示实际做了提亮
-static bool applyBrightnessBoost(cv::Mat& frame, double currentBrightness) {
-    if (currentBrightness >= CAMERA_BRIGHTNESS_BOOST_THRESHOLD
-        || currentBrightness < CAMERA_BRIGHTNESS_BOOST_MIN_FLOOR) {
+static bool applyBrightnessBoost(cv::Mat& frame,
+                                 double currentBrightness,
+                                 const DeviceConfig::BrightnessBoostConfig& config) {
+    if (currentBrightness >= config.boostThreshold
+        || currentBrightness < config.boostMinFloor) {
         return false;
     }
 
     // ── 自适应目标：极暗场景不硬拉到满目标，限制噪声放大 ──
-    double effectiveTarget = CAMERA_BRIGHTNESS_TARGET;
+    double effectiveTarget = config.target;
     if (currentBrightness < 55.0) {
-        // 亮度 42 → 目标 ≈ 76 而非 105，增益从 2.5x 降到 1.8x
+        // 亮度很暗时只拉向部分目标，避免噪声被过度放大。
         effectiveTarget = currentBrightness
-            + (CAMERA_BRIGHTNESS_TARGET - currentBrightness) * CAMERA_BRIGHTNESS_DARK_BLEND;
+            + (config.target - currentBrightness) * config.darkBlend;
     }
 
     // Gamma 校正：对暗部提升更温和，保留高光
-    double gamma = CAMERA_BRIGHTNESS_GAMMA;
+    double gamma = config.gamma;
     if (currentBrightness < 50.0) {
         gamma = std::max(0.60, gamma - 0.10);
     }
@@ -194,8 +196,8 @@ static bool applyBrightnessBoost(cv::Mat& frame, double currentBrightness) {
     // Gamma 后测量残差，只在仍偏暗时施加轻量线性补偿
     double afterGamma = cv::mean(frame)[0];
     if (afterGamma < effectiveTarget && afterGamma > 1.0) {
-        double residualAlpha = std::min(effectiveTarget / afterGamma, 1.35);
-        double residualBeta  = std::min((effectiveTarget - afterGamma) * 0.10, 10.0);
+        double residualAlpha = std::min(effectiveTarget / afterGamma, config.maxAlpha);
+        double residualBeta  = std::min((effectiveTarget - afterGamma) * 0.10, config.maxBeta);
         if (residualAlpha > 1.03 || residualBeta > 1.5) {
             frame.convertTo(frame, -1, residualAlpha, residualBeta);
         }
@@ -325,6 +327,27 @@ void CameraTask::setPersonEventCallback(PersonEventCallback cb) {
     personEventCallback = cb;
 }
 
+void CameraTask::setRuntimeConfig(const DeviceConfig& config) {
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        captureConfig = config.captureDefaults;
+        brightnessBoostConfig = config.brightnessBoost;
+    }
+
+    brightnessBlackThreshold.store(config.captureDefaults.brightnessBlackThreshold);
+    set_max_frame_candidates(static_cast<size_t>(std::max(1, config.captureDefaults.maxFrameCandidates)));
+}
+
+DeviceConfig::CaptureDefaults CameraTask::getCaptureConfigSnapshot() const {
+    std::lock_guard<std::mutex> lock(configMutex);
+    return captureConfig;
+}
+
+DeviceConfig::BrightnessBoostConfig CameraTask::getBrightnessBoostConfigSnapshot() const {
+    std::lock_guard<std::mutex> lock(configMutex);
+    return brightnessBoostConfig;
+}
+
 void CameraTask::logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail) {
     auto now = std::chrono::steady_clock::now();
     std::string key = std::string(stage) + ":" + std::to_string(trackId);
@@ -365,8 +388,9 @@ double CameraTask::computeFocusMeasure(const Mat& img) {
     if (img.empty() || img.cols <= 0 || img.rows <= 0) {
         return 0.0;
     }
-    
-    int scale_factor = CAPTURE_FOCUS_SCALE_FACTOR;
+
+    DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
+    int scale_factor = std::max(1, config.focusScaleFactor);
     
     int new_width = img.cols / scale_factor;
     int new_height = img.rows / scale_factor;
@@ -450,6 +474,7 @@ float CameraTask::computeMotionBlurSeverity(const Mat& img) {
 
 bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     if (landmarks.size() != 5) return false;
+    DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
     cv::Point2f left_eye = landmarks[0];
     cv::Point2f right_eye = landmarks[1];
     cv::Point2f nose = landmarks[2];
@@ -474,8 +499,8 @@ bool CameraTask::isFrontalFace(const std::vector<cv::Point2f>& landmarks) {
     float nose_vertical_ratio = (nose.y - (left_eye.y + right_eye.y) * 0.5f) / eye_distance;
     float mouth_vertical_ratio = (mouth_center.y - nose.y) / eye_distance;
 
-        return (std::fabs(roll) < CAPTURE_STRONG_FRONTAL_MAX_ROLL) &&
-            (std::fabs(yaw) < CAPTURE_STRONG_FRONTAL_MAX_YAW) &&
+        return (std::fabs(roll) < config.strongFrontalMaxRoll) &&
+            (std::fabs(yaw) < config.strongFrontalMaxYaw) &&
             (mouth_offset < 0.24f) &&
             (mouth_roll < 0.20f) &&
             (nose_vertical_ratio > 0.05f) &&
@@ -516,13 +541,14 @@ void CameraTask::updateFPS() {
 }
 
 bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
+    DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
     std::lock_guard<std::mutex> lock(candidateEvalMutex);
     int pending_for_track = pendingCandidateEvalByTrack[job.trackId];
-    if (pending_for_track >= CAPTURE_CANDIDATE_PER_TRACK_MAX_PENDING) {
+    if (pending_for_track >= config.candidatePerTrackMaxPending) {
         char detail[192];
         std::snprintf(detail, sizeof(detail), "pending=%d max=%d queue=%zu",
                       pending_for_track,
-                      CAPTURE_CANDIDATE_PER_TRACK_MAX_PENDING,
+                      config.candidatePerTrackMaxPending,
                       candidateEvalQueue.size());
         logTrackReject("queue", job.trackId, "pending_limit", detail);
         return false;
@@ -544,7 +570,7 @@ bool CameraTask::enqueueCandidateEvaluation(CandidateEvalJob job) {
         remove_pending_for_track(dropped_track_id);
     };
 
-    if (candidateEvalQueue.size() >= CAPTURE_CANDIDATE_QUEUE_MAX) {
+    if (candidateEvalQueue.size() >= static_cast<size_t>(config.candidateQueueMax)) {
         size_t drop_index = candidateEvalQueue.size();
 
         if (pending_for_track > 0) {
@@ -616,8 +642,9 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
         }
 
         if (!job.personRoi.empty() && job.personRoi.cols > 0 && job.personRoi.rows > 0) {
+            DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
             Mat person_roi_resized;
-            int target_width = min(CAPTURE_FACE_INPUT_MAX_WIDTH, job.personRoi.cols);
+            int target_width = min(config.faceInputMaxWidth, job.personRoi.cols);
             int target_height = static_cast<int>(job.personRoi.rows * target_width / (float)job.personRoi.cols);
 
             if (target_width > 0 && target_height > 0) {
@@ -646,7 +673,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                     float face_scale_y = (float)job.personRoi.rows / (float)person_roi_resized.rows;
 
                     det best_face = face_result[best_idx];
-                    if (best_face.score >= CAPTURE_MIN_FACE_SCORE && best_face.landmarks.size() >= 3) {
+                    if (best_face.score >= config.minFaceScore && best_face.landmarks.size() >= 3) {
                         best_face.box.x *= face_scale_x;
                         best_face.box.y *= face_scale_y;
                         best_face.box.width *= face_scale_x;
@@ -668,17 +695,17 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                         if (base_fbox.width > 0 && base_fbox.height > 0) {
                             int face_short_side = std::min(base_fbox.width, base_fbox.height);
                             int face_area = base_fbox.area();
-                            if (face_short_side >= CAPTURE_MIN_FACE_BOX_SHORT_SIDE &&
-                                face_area >= CAPTURE_MIN_FACE_BOX_AREA) {
+                            if (face_short_side >= config.minFaceBoxShortSide &&
+                                face_area >= config.minFaceBoxArea) {
                                 float person_area = static_cast<float>(job.personRoi.cols * job.personRoi.rows);
                                 float face_area_ratio = face_area / std::max(1.0f, person_area);
                                 float face_width_ratio = static_cast<float>(base_fbox.width) / std::max(1, job.personRoi.cols);
                                 float face_center_y_ratio = static_cast<float>(base_fbox.y + base_fbox.height * 0.5f) / std::max(1, job.personRoi.rows);
                                 bool face_geometry_ok =
-                                    face_area_ratio >= CAPTURE_FACE_MIN_AREA_IN_PERSON &&
-                                    face_width_ratio >= CAPTURE_FACE_MIN_WIDTH_RATIO &&
-                                    face_center_y_ratio >= CAPTURE_FACE_MIN_CENTER_Y_RATIO &&
-                                    face_center_y_ratio <= CAPTURE_FACE_MAX_CENTER_Y_RATIO;
+                                    face_area_ratio >= config.faceMinAreaInPerson &&
+                                    face_width_ratio >= config.faceMinWidthRatio &&
+                                    face_center_y_ratio >= config.faceMinCenterYRatio &&
+                                    face_center_y_ratio <= config.faceMaxCenterYRatio;
 
                                 if (face_geometry_ok) {
                                     float margin_left = static_cast<float>(base_fbox.x);
@@ -690,9 +717,9 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                     float min_margin_ratio = std::min(margin_x_ratio, margin_y_ratio);
 
                                     float face_edge_occlusion = 0.0f;
-                                    if (min_margin_ratio < CAPTURE_FACE_EDGE_MIN_MARGIN) {
+                                    if (min_margin_ratio < config.faceEdgeMinMargin) {
                                         face_edge_occlusion =
-                                            (CAPTURE_FACE_EDGE_MIN_MARGIN - min_margin_ratio) / CAPTURE_FACE_EDGE_MIN_MARGIN;
+                                            (config.faceEdgeMinMargin - min_margin_ratio) / config.faceEdgeMinMargin;
                                         face_edge_occlusion = std::max(0.0f, std::min(1.0f, face_edge_occlusion));
                                     }
 
@@ -708,26 +735,26 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         bool frontal_relaxed_ok = frontal_ok ||
                                             (roll < 24.0f && yaw < 0.32f && best_face.score >= 0.58f && face_edge_occlusion < 0.40f);
                                         bool weak_frontal_ok = frontal_relaxed_ok ||
-                                            (roll < 32.0f && yaw < 0.48f && best_face.score >= CAPTURE_MIN_FACE_SCORE && face_edge_occlusion < 0.72f);
+                                            (roll < 32.0f && yaw < 0.48f && best_face.score >= config.minFaceScore && face_edge_occlusion < 0.72f);
                                         double current_clarity = computeFocusMeasure(job.personRoi(base_fbox));
                                         float current_blur_severity = computeMotionBlurSeverity(job.personRoi(base_fbox));
                                         bool strong_candidate_ok =
-                                            (!CAPTURE_REQUIRE_FRONTAL_FACE || frontal_relaxed_ok) &&
-                                            current_clarity > CAPTURE_MIN_CLARITY &&
-                                            current_blur_severity < CAPTURE_MAX_BLUR_SEVERITY &&
-                                            yaw < CAPTURE_MAX_YAW;
+                                            (!config.requireFrontalFace || frontal_relaxed_ok) &&
+                                            current_clarity > config.minClarity &&
+                                            current_blur_severity < config.maxBlurSeverity &&
+                                            yaw < config.maxYaw;
                                         bool fallback_candidate_ok =
-                                            (!CAPTURE_REQUIRE_FRONTAL_FACE || weak_frontal_ok) &&
-                                            current_clarity > CAPTURE_FALLBACK_MIN_CLARITY &&
-                                            current_blur_severity < CAPTURE_FALLBACK_MAX_BLUR_SEVERITY &&
-                                            yaw < CAPTURE_FALLBACK_MAX_YAW &&
-                                            face_edge_occlusion < CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION;
+                                            (!config.requireFrontalFace || weak_frontal_ok) &&
+                                            current_clarity > config.fallbackMinClarity &&
+                                            current_blur_severity < config.fallbackMaxBlurSeverity &&
+                                            yaw < config.fallbackMaxYaw &&
+                                            face_edge_occlusion < config.fallbackMaxFaceEdgeOcclusion;
 
                                         if (strong_candidate_ok || fallback_candidate_ok) {
-                                            int crop_w = std::max(1, static_cast<int>(base_fbox.width * CAPTURE_HEADSHOT_EXPAND_RATIO));
-                                            int crop_h = std::max(1, static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_EXPAND_RATIO));
+                                            int crop_w = std::max(1, static_cast<int>(base_fbox.width * config.headshotExpandRatio));
+                                            int crop_h = std::max(1, static_cast<int>(base_fbox.height * config.headshotExpandRatio));
                                             int crop_cx = base_fbox.x + base_fbox.width / 2;
-                                            int crop_cy = base_fbox.y + base_fbox.height / 2 + static_cast<int>(base_fbox.height * CAPTURE_HEADSHOT_DOWN_SHIFT);
+                                            int crop_cy = base_fbox.y + base_fbox.height / 2 + static_cast<int>(base_fbox.height * config.headshotDownShift);
                                             int crop_x = crop_cx - crop_w / 2;
                                             int crop_y = crop_cy - crop_h / 2;
 
@@ -745,21 +772,21 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                 float crop_min_margin = std::min(std::min(crop_margin_left, crop_margin_right),
                                                                                  std::min(crop_margin_top, crop_margin_bottom));
                                                 float required_crop_margin = strong_candidate_ok ?
-                                                    CAPTURE_HEADSHOT_MIN_FACE_MARGIN :
-                                                    CAPTURE_FALLBACK_HEADSHOT_MIN_FACE_MARGIN;
+                                                    config.headshotMinFaceMargin :
+                                                    config.fallbackHeadshotMinFaceMargin;
                                                 if (crop_min_margin >= required_crop_margin) {
                                                     Mat face_aligned = job.personRoi(fbox).clone();
                                                     int upper_body_w = std::min(job.personRoi.cols,
-                                                        std::max(static_cast<int>(base_fbox.width * CAPTURE_UPPER_BODY_WIDTH_FACE_RATIO),
-                                                                 static_cast<int>(job.personRoi.cols * CAPTURE_UPPER_BODY_MIN_WIDTH_RATIO)));
+                                                        std::max(static_cast<int>(base_fbox.width * config.upperBodyWidthFaceRatio),
+                                                                 static_cast<int>(job.personRoi.cols * config.upperBodyMinWidthRatio)));
                                                     int upper_body_h = std::min(job.personRoi.rows,
-                                                        std::max(static_cast<int>(base_fbox.height * CAPTURE_UPPER_BODY_HEIGHT_FACE_RATIO),
-                                                                 static_cast<int>(job.personRoi.rows * CAPTURE_UPPER_BODY_MIN_HEIGHT_RATIO)));
+                                                        std::max(static_cast<int>(base_fbox.height * config.upperBodyHeightFaceRatio),
+                                                                 static_cast<int>(job.personRoi.rows * config.upperBodyMinHeightRatio)));
                                                     int upper_body_cx = base_fbox.x + base_fbox.width / 2;
-                                                    int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * CAPTURE_UPPER_BODY_CENTER_Y_RATIO);
+                                                    int upper_body_cy = base_fbox.y + static_cast<int>(base_fbox.height * config.upperBodyCenterYRatio);
                                                     int upper_body_x = std::max(0, std::min(job.personRoi.cols - upper_body_w, upper_body_cx - upper_body_w / 2));
                                                     int upper_body_y = std::max(0, std::min(job.personRoi.rows - upper_body_h,
-                                                        upper_body_cy - static_cast<int>(upper_body_h / CAPTURE_UPPER_BODY_TOP_DIVISOR)));
+                                                        upper_body_cy - static_cast<int>(upper_body_h / config.upperBodyTopDivisor)));
                                                     cv::Rect upper_body_box(
                                                         upper_body_x,
                                                         upper_body_y,
@@ -784,25 +811,25 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                         area_weight = 0.08f - ratio * 0.05f;
                                                     }
 
-                                                    float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - CAPTURE_AREA_SCORE_TARGET_RATIO) /
-                                                                                        CAPTURE_AREA_SCORE_TARGET_RATIO);
-                                                    float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, CAPTURE_MIN_CLARITY)));
-                                                    float person_occ_norm = job.personOcclusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
+                                                    float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - config.areaScoreTargetRatio) /
+                                                                                        std::max(1e-6f, config.areaScoreTargetRatio));
+                                                    float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, config.minClarity)));
+                                                    float person_occ_norm = job.personOcclusion / std::max(1e-6f, config.maxPersonOcclusion);
                                                     person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
-                                                    float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, CAPTURE_MAX_FACE_EDGE_OCCLUSION);
+                                                    float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, config.maxFaceEdgeOcclusion);
                                                     face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
                                                     float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
-                                                    float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, CAPTURE_MAX_MOTION_RATIO));
-                                                    float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, CAPTURE_MAX_BLUR_SEVERITY));
-                                                    float candidate_penalty = strong_candidate_ok ? 0.0f : CAPTURE_FALLBACK_SCORE_PENALTY;
+                                                    float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, config.maxMotionRatio));
+                                                    float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, config.maxBlurSeverity));
+                                                    float candidate_penalty = strong_candidate_ok ? 0.0f : config.fallbackScorePenalty;
 
                                                     Track::FrameData frame_data;
                                                     frame_data.score = current_clarity * (quality_weight + 0.10f) +
                                                                        clarity_norm * 120.0f +
                                                                        area_score * 1000 * area_weight -
-                                                                       occlusion_penalty * CAPTURE_OCCLUSION_SCORE_PENALTY -
-                                                                       motion_penalty * CAPTURE_MOTION_SCORE_PENALTY -
-                                                                       blur_severity_penalty * CAPTURE_BLUR_SEVERITY_SCORE_PENALTY -
+                                                                       occlusion_penalty * config.occlusionScorePenalty -
+                                                                       motion_penalty * config.motionScorePenalty -
+                                                                       blur_severity_penalty * config.blurSeverityScorePenalty -
                                                                        candidate_penalty;
                                                     frame_data.person_roi = person_aligned;
                                                     frame_data.face_roi = face_aligned;
@@ -852,15 +879,15 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                           face_edge_occlusion,
                                                           current_blur_severity);
                                             const char* reason = "quality_gate";
-                                            if (CAPTURE_REQUIRE_FRONTAL_FACE && !weak_frontal_ok) {
+                                            if (config.requireFrontalFace && !weak_frontal_ok) {
                                                 reason = "non_frontal";
-                                            } else if (current_clarity <= CAPTURE_FALLBACK_MIN_CLARITY) {
+                                            } else if (current_clarity <= config.fallbackMinClarity) {
                                                 reason = "clarity_low";
-                                            } else if (current_blur_severity >= CAPTURE_FALLBACK_MAX_BLUR_SEVERITY) {
+                                            } else if (current_blur_severity >= config.fallbackMaxBlurSeverity) {
                                                 reason = "motion_blur";
-                                            } else if (yaw >= CAPTURE_FALLBACK_MAX_YAW) {
+                                            } else if (yaw >= config.fallbackMaxYaw) {
                                                 reason = "yaw_large";
-                                            } else if (face_edge_occlusion >= CAPTURE_FALLBACK_MAX_FACE_EDGE_OCCLUSION) {
+                                            } else if (face_edge_occlusion >= config.fallbackMaxFaceEdgeOcclusion) {
                                                 reason = "edge_occlusion";
                                             }
                                             logTrackReject("eval", job.trackId, reason, detail);
@@ -883,9 +910,9 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                 char detail[224];
                                 std::snprintf(detail, sizeof(detail), "short=%d min_short=%d area=%d min_area=%d",
                                               face_short_side,
-                                              CAPTURE_MIN_FACE_BOX_SHORT_SIDE,
+                                              config.minFaceBoxShortSide,
                                               face_area,
-                                              CAPTURE_MIN_FACE_BOX_AREA);
+                                              config.minFaceBoxArea);
                                 logTrackReject("eval", job.trackId, "face_box_small", detail);
                             }
                         } else {
@@ -897,7 +924,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                         char detail[192];
                         std::snprintf(detail, sizeof(detail), "score=%.2f min=%.2f landmarks=%zu",
                                       best_face.score,
-                                      CAPTURE_MIN_FACE_SCORE,
+                                      config.minFaceScore,
                                       best_face.landmarks.size());
                         logTrackReject("eval", job.trackId,
                                        best_face.landmarks.size() < 3 ? "landmarks_missing" : "face_score_low",
@@ -1107,8 +1134,12 @@ void CameraTask::captureLoop() {
             continue;
         }
 
+        DeviceConfig::CaptureDefaults capture = getCaptureConfigSnapshot();
+        DeviceConfig::BrightnessBoostConfig boostConfig = getBrightnessBoostConfigSnapshot();
+
         brightnessSampleCounter++;
-        if (brightnessSampleCounter % CAMERA_BRIGHTNESS_SAMPLE_INTERVAL == 0) {
+        int brightnessSampleInterval = std::max(1, capture.brightnessSampleInterval);
+        if (brightnessSampleCounter % brightnessSampleInterval == 0) {
             double brightnessRaw = computeSceneBrightnessFast(frame);
             lastBrightnessRaw = brightnessRaw;
             filteredBrightness = updateFilteredBrightness(filteredBrightness, brightnessRaw);
@@ -1120,7 +1151,7 @@ void CameraTask::captureLoop() {
             if (sinceLastSwitch < kIrCutSettleAfterSwitchSec) {
                 whiteCandidateHits = 0;
                 blackCandidateHits = 0;
-            } else if (filteredBrightness >= CAMERA_BRIGHTNESS_WHITE_THRESHOLD) {
+            } else if (filteredBrightness >= capture.brightnessWhiteThreshold) {
                 whiteCandidateHits++;
                 blackCandidateHits = 0;
                 if (whiteCandidateHits >= kIrCutConsecutiveHits) {
@@ -1149,9 +1180,9 @@ void CameraTask::captureLoop() {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (latestFrameSeq == consumedFrameSeq) {
                 latestFrame = frame.clone();
-                if (filteredBrightness > CAMERA_BRIGHTNESS_BOOST_MIN_FLOOR
-                    && filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD) {
-                    boosted = applyBrightnessBoost(latestFrame, filteredBrightness);
+                if (filteredBrightness > boostConfig.boostMinFloor
+                    && filteredBrightness < boostConfig.boostThreshold) {
+                    boosted = applyBrightnessBoost(latestFrame, filteredBrightness, boostConfig);
                 }
                 latestFrameSeq++;
                 published = true;
@@ -1205,6 +1236,7 @@ void CameraTask::captureSnapshot() {
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     static int personDetectCounter = 0;
     static std::vector<Track> cachedTracks;
+    DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
 
     const float inv_diag_720p = 1.0f / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
 
@@ -1245,7 +1277,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     Mat resized_frame;
     cv::resize(frame, resized_frame, Size(IMAGE_WIDTH, IMAGE_HEIGHT), 0, 0, cv::INTER_LINEAR);
 
-    bool runPersonDetect = (personDetectCounter % CAPTURE_PERSON_DETECT_INTERVAL == 0) || cachedTracks.empty();
+    int personDetectInterval = std::max(1, config.personDetectInterval);
+    bool runPersonDetect = (personDetectCounter % personDetectInterval == 0) || cachedTracks.empty();
     personDetectCounter++;
 
     if (runPersonDetect) {
@@ -1329,9 +1362,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         }
         lastTrackCenters[t.id] = curr_center_720p;
 
-        if (t.hits < CAPTURE_MIN_TRACK_HITS) {
+        if (t.hits < config.minTrackHits) {
             char detail[160];
-            std::snprintf(detail, sizeof(detail), "hits=%d min_hits=%d", t.hits, CAPTURE_MIN_TRACK_HITS);
+            std::snprintf(detail, sizeof(detail), "hits=%d min_hits=%d", t.hits, config.minTrackHits);
             logTrackReject("gate", t.id, "track_unstable", detail);
             continue;
         }
@@ -1356,9 +1389,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         
         if (orig_width <= 0 || orig_height <= 0) continue;
         
-        int expand_x = static_cast<int>(orig_width * CAPTURE_PERSON_CONTEXT_EXPAND_X);
-        int expand_top = static_cast<int>(orig_height * CAPTURE_PERSON_CONTEXT_EXPAND_TOP);
-        int expand_bottom = static_cast<int>(orig_height * CAPTURE_PERSON_CONTEXT_EXPAND_BOTTOM);
+        int expand_x = static_cast<int>(orig_width * config.personContextExpandX);
+        int expand_top = static_cast<int>(orig_height * config.personContextExpandTop);
+        int expand_bottom = static_cast<int>(orig_height * config.personContextExpandBottom);
         int expanded_x = std::max(0, orig_x - expand_x);
         int expanded_y = std::max(0, orig_y - expand_top);
         int expanded_right = std::min(CAMERA_WIDTH, orig_x + orig_width + expand_x);
@@ -1378,15 +1411,15 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             area_trend_ratio = (area_now - area_prev) / (area_prev + 1e-6f);
 
             // 先更新接近状态，再用于后续抓拍门控
-            if (area_trend_ratio > CAPTURE_APPROACH_RATIO_POS) {
+            if (area_trend_ratio > config.approachRatioPos) {
                 t.is_approaching = true;
-            } else if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG) {
+            } else if (area_trend_ratio < config.approachRatioNeg) {
                 t.is_approaching = false;
             }
         }
 
-        bool near_ok = area_ratio >= CAPTURE_NEAR_AREA_RATIO;
-        bool approach_ok = t.is_approaching || near_ok || (CAPTURE_REQUIRE_APPROACH == 0);
+        bool near_ok = area_ratio >= config.nearAreaRatio;
+        bool approach_ok = t.is_approaching || near_ok || !config.requireApproach;
         if (t.has_captured) {
             logTrackReject("gate", t.id, "already_captured", "track already captured");
             continue;
@@ -1401,7 +1434,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             logTrackReject("gate", t.id, "not_approaching", detail);
             continue;
         }
-        if (area_trend_ratio < CAPTURE_APPROACH_RATIO_NEG && !near_ok) {
+        if (area_trend_ratio < config.approachRatioNeg && !near_ok) {
             char detail[192];
             std::snprintf(detail, sizeof(detail), "trend=%.3f near=%d area=%.4f",
                           area_trend_ratio,
@@ -1410,20 +1443,20 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             logTrackReject("gate", t.id, "moving_away", detail);
             continue;
         }
-        if (area_ratio <= CAPTURE_MIN_AREA_RATIO) {
+        if (area_ratio <= config.minAreaRatio) {
             char detail[192];
             std::snprintf(detail, sizeof(detail), "area=%.4f min=%.4f near=%.4f",
                           area_ratio,
-                          CAPTURE_MIN_AREA_RATIO,
-                          CAPTURE_NEAR_AREA_RATIO);
+                          config.minAreaRatio,
+                          config.nearAreaRatio);
             logTrackReject("gate", t.id, "too_far", detail);
             continue;
         }
-        if (motion_ratio > CAPTURE_MAX_MOTION_REJECT_RATIO) {
+        if (motion_ratio > config.maxMotionRejectRatio) {
             char detail[192];
             std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f",
                           motion_ratio,
-                          CAPTURE_MAX_MOTION_REJECT_RATIO,
+                          config.maxMotionRejectRatio,
                           area_ratio);
             logTrackReject("gate", t.id, "motion_large", detail);
             continue;

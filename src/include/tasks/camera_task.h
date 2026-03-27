@@ -1,5 +1,6 @@
 #pragma once
 #include <opencv2/opencv.hpp>
+#include "device_config.h"
 #include "rknn_api.h"
 #include "main.h"
 #include <thread>
@@ -28,6 +29,7 @@ public:
     void stop();
     void setUploadCallback(UploadCallback cb);
     void setPersonEventCallback(PersonEventCallback cb);
+    void setRuntimeConfig(const DeviceConfig& config);
     void setBrightnessBlackThreshold(double threshold) { brightnessBlackThreshold.store(threshold); }
     double getBrightnessBlackThreshold() const { return brightnessBlackThreshold.load(); }
     void captureSnapshot();
@@ -59,6 +61,8 @@ private:
     void clearTrackReject(const char* stage, int trackId);
     void processFrame(const cv::Mat& frame, rknn_context personCtx);
     void updateFPS(); // 更新FPS计算
+    DeviceConfig::CaptureDefaults getCaptureConfigSnapshot() const;
+    DeviceConfig::BrightnessBoostConfig getBrightnessBoostConfigSnapshot() const;
     
     std::string personModelPath;
     std::string faceModelPath;
@@ -111,5 +115,8 @@ private:
     std::unordered_set<int> reportedPersonIds;
     std::atomic<double> environmentBrightness{0.0};
     std::atomic<double> brightnessBlackThreshold{CAMERA_BRIGHTNESS_BLACK_THRESHOLD};
+    mutable std::mutex configMutex;
+    DeviceConfig::CaptureDefaults captureConfig;
+    DeviceConfig::BrightnessBoostConfig brightnessBoostConfig;
     bool hadPersonsInScene{false};
 };

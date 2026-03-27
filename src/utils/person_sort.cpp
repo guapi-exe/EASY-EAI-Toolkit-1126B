@@ -15,6 +15,7 @@ extern "C" {
 static std::vector<Track> tracks;
 static int next_id = 1;
 static std::mutex tracks_mutex;
+static size_t g_max_frame_candidates = CAPTURE_MAX_FRAME_CANDIDATES;
 
 struct PendingTrack {
     cv::Rect2f bbox;
@@ -57,6 +58,11 @@ void set_upload_callback(std::function<void(const cv::Mat&, int, const std::stri
     upload_callback = callback;
     captured_person_ids = person_ids;
     captured_face_ids = face_ids;
+}
+
+void set_max_frame_candidates(size_t maxFrameCandidates) {
+    std::lock_guard<std::mutex> lock(tracks_mutex);
+    g_max_frame_candidates = std::max<size_t>(1, maxFrameCandidates);
 }
 
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -677,7 +683,7 @@ void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
     std::lock_guard<std::mutex> lock(tracks_mutex);
     for (auto& t : tracks) {
         if (t.id == track_id) {
-            if (t.frame_candidates.size() < CAPTURE_MAX_FRAME_CANDIDATES) {
+            if (t.frame_candidates.size() < g_max_frame_candidates) {
                 t.frame_candidates.push_back(frame_data);
                 log_debug("Track %d 添加候选帧 (评分: %.2f, 候选帧总数: %zu)", 
                          track_id, frame_data.score, t.frame_candidates.size());
