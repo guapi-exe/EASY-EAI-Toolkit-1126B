@@ -784,7 +784,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                         area_weight = 0.08f - ratio * 0.05f;
                                                     }
 
-                                                    float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - 0.15f) / 0.15f);
+                                                    float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - CAPTURE_AREA_SCORE_TARGET_RATIO) /
+                                                                                        CAPTURE_AREA_SCORE_TARGET_RATIO);
                                                     float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, CAPTURE_MIN_CLARITY)));
                                                     float person_occ_norm = job.personOcclusion / std::max(1e-6f, CAPTURE_MAX_PERSON_OCCLUSION);
                                                     person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
