@@ -44,7 +44,7 @@
 #define CAPTURE_PERSON_CONTEXT_EXPAND_TOP 0.18f
 #define CAPTURE_PERSON_CONTEXT_EXPAND_BOTTOM 0.10f
 // 人脸置信度最低阈值。
-#define CAPTURE_MIN_FACE_SCORE          0.47f
+#define CAPTURE_MIN_FACE_SCORE          0.55f
 // 头肩图裁切比例：以脸框为基准向外扩并略微下移，得到更自然的人像构图。
 #define CAPTURE_HEADSHOT_EXPAND_RATIO   1.80f
 #define CAPTURE_HEADSHOT_DOWN_SHIFT     0.20f
@@ -54,12 +54,12 @@
 #define CAPTURE_MIN_AREA_RATIO          0.025f
 #define CAPTURE_NEAR_AREA_RATIO         0.065f
 // 面积评分中心值：抓拍时更偏好该人体面积占比附近的候选，过大或过小都会降分。
-#define CAPTURE_AREA_SCORE_TARGET_RATIO 0.5f
+#define CAPTURE_AREA_SCORE_TARGET_RATIO 0.6f
 // 接近趋势判断：目标面积变化为正且超过阈值视为“走近镜头”。
-#define CAPTURE_APPROACH_RATIO_POS      0.08f
-#define CAPTURE_APPROACH_RATIO_NEG     -0.08f
+#define CAPTURE_APPROACH_RATIO_POS      0.16f
+#define CAPTURE_APPROACH_RATIO_NEG     -0.16f
 // 轨迹最少命中次数，避免刚出现的瞬时误检直接触发抓拍。
-#define CAPTURE_MIN_TRACK_HITS          2
+#define CAPTURE_MIN_TRACK_HITS          3
 // 是否要求目标处于接近状态、是否要求正脸。
 #define CAPTURE_REQUIRE_APPROACH        1
 #define CAPTURE_REQUIRE_FRONTAL_FACE    1
