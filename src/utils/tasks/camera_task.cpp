@@ -835,6 +835,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     frame_data.face_roi = face_aligned;
                                                     frame_data.has_face = true;
                                                     frame_data.is_frontal = frontal_ok;
+                                                    frame_data.face_pose_level = frontal_ok ? 2 : (frontal_relaxed_ok ? 1 : 0);
+                                                    frame_data.strong_candidate = strong_candidate_ok;
                                                     frame_data.yaw_abs = yaw;
                                                     frame_data.clarity = current_clarity;
                                                     frame_data.area_ratio = job.areaRatio;

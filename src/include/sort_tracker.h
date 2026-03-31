@@ -43,6 +43,8 @@ struct Track {
         cv::Mat face_roi;
         bool has_face;
         bool is_frontal;
+        uint8_t face_pose_level;
+        bool strong_candidate;
         float yaw_abs;
         double clarity;
         float area_ratio;

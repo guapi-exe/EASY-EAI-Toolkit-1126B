@@ -10,8 +10,8 @@
       "id": "docs-artifact",
       "type": "artifact",
       "title": "协议与问题文档",
-      "x": -1099,
-      "y": 115,
+      "x": -1127,
+      "y": 178,
       "inputs": [],
       "outputs": [
         {
@@ -102,8 +102,8 @@
       "id": "hardware-domain",
       "type": "domain",
       "title": "commonApi 板端采集域",
-      "x": -701,
-      "y": 203,
+      "x": -646,
+      "y": 155,
       "inputs": [
         {
           "id": "board_interfaces",
@@ -149,8 +149,8 @@
       "id": "config-artifact",
       "type": "artifact",
       "title": "device_config.json 配置基线",
-      "x": -637,
-      "y": 991,
+      "x": -508,
+      "y": 1124,
       "inputs": [
         {
           "id": "default_values",
@@ -202,8 +202,8 @@
       "id": "main-system",
       "type": "system",
       "title": "main.cpp 运行编排",
-      "x": -321,
-      "y": 159,
+      "x": -108,
+      "y": 1049,
       "inputs": [
         {
           "id": "boot_config",
@@ -256,8 +256,8 @@
       "id": "capture-service",
       "type": "service",
       "title": "CameraTask 抓拍筛选服务",
-      "x": 0,
-      "y": 360,
+      "x": -320,
+      "y": 341,
       "inputs": [
         {
           "id": "camera_frames",
@@ -323,8 +323,8 @@
       "id": "build-system",
       "type": "system",
       "title": "CMake 与脚本构建",
-      "x": 0,
-      "y": 620,
+      "x": 364,
+      "y": 1563,
       "inputs": [
         {
           "id": "source_tree",
@@ -375,8 +375,8 @@
       "id": "uploader-service",
       "type": "service",
       "title": "UploaderTask 上传增强服务",
-      "x": 380,
-      "y": 100,
+      "x": 44,
+      "y": 385,
       "inputs": [
         {
           "id": "image_queue",
@@ -430,8 +430,8 @@
       "id": "tcp-api",
       "type": "api",
       "title": "TcpClient 设备协议 API",
-      "x": 380,
-      "y": 360,
+      "x": 437,
+      "y": 495,
       "inputs": [
         {
           "id": "protocol_contract",
@@ -493,8 +493,8 @@
       "id": "validation-subflow",
       "type": "subflow",
       "title": "camera_test 与 streaming 验证子流程",
-      "x": 380,
-      "y": 620,
+      "x": 858,
+      "y": 1395,
       "inputs": [
         {
           "id": "built_binaries",
@@ -544,8 +544,8 @@
       "id": "research-task",
       "type": "task",
       "title": "暗光增强与去模糊研发任务",
-      "x": 760,
-      "y": 360,
+      "x": 665,
+      "y": 1004,
       "inputs": [
         {
           "id": "quality_problem",
@@ -598,8 +598,8 @@
       "id": "release-artifact",
       "type": "artifact",
       "title": "Release 与板端交付工件",
-      "x": 760,
-      "y": 620,
+      "x": 1315,
+      "y": 1472,
       "inputs": [
         {
           "id": "built_release",

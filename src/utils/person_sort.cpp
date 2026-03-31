@@ -32,18 +32,28 @@ struct LostTrack {
     int ttl;
 };
 
+struct RecentCapture {
+    int id;
+    cv::Rect2f bbox;
+    cv::Mat hist;
+    int ttl;
+};
+
 static std::vector<LostTrack> lost_tracks;
+static std::vector<RecentCapture> recent_captures;
 static std::vector<PendingTrack> pending_tracks;
 static constexpr int LOST_TRACK_TTL = MAX_MISSED + 15;
+static constexpr int RECENT_CAPTURE_TTL = MAX_MISSED + 90;
 static constexpr int PENDING_TRACK_TTL = 4;
 static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
 
-static Track create_track(const Detection& det, int id);
+static Track create_track(const Detection& det, int id, bool already_captured = false);
 
 void sort_init() { 
     std::unique_lock<std::mutex> lock(tracks_mutex);
     tracks.clear(); 
     lost_tracks.clear();
+    recent_captures.clear();
     pending_tracks.clear();
     next_id = 1; 
 }
@@ -63,6 +73,11 @@ void set_upload_callback(std::function<void(const cv::Mat&, int, const std::stri
 void set_max_frame_candidates(size_t maxFrameCandidates) {
     std::lock_guard<std::mutex> lock(tracks_mutex);
     g_max_frame_candidates = std::max<size_t>(1, maxFrameCandidates);
+}
+
+static bool is_track_already_captured(int track_id) {
+    return (captured_person_ids && captured_person_ids->find(track_id) != captured_person_ids->end()) ||
+           (captured_face_ids && captured_face_ids->find(track_id) != captured_face_ids->end());
 }
 
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -129,6 +144,17 @@ static void age_lost_tracks() {
         lost_tracks.end());
 }
 
+static void age_recent_captures() {
+    for (auto& rc : recent_captures) {
+        rc.ttl--;
+    }
+    recent_captures.erase(
+        std::remove_if(recent_captures.begin(), recent_captures.end(), [](const RecentCapture& rc) {
+            return rc.ttl <= 0;
+        }),
+        recent_captures.end());
+}
+
 static void cache_lost_track(const Track& t) {
     if (!t.confirmed || t.hist.empty()) {
         return;
@@ -146,6 +172,25 @@ static void cache_lost_track(const Track& t) {
     lt.hist = t.hist.clone();
     lt.ttl = LOST_TRACK_TTL;
     lost_tracks.push_back(std::move(lt));
+}
+
+static void remember_recent_capture(const Track& t) {
+    if (!is_track_already_captured(t.id) || t.hist.empty()) {
+        return;
+    }
+
+    recent_captures.erase(
+        std::remove_if(recent_captures.begin(), recent_captures.end(), [&](const RecentCapture& rc) {
+            return rc.id == t.id;
+        }),
+        recent_captures.end());
+
+    RecentCapture rc;
+    rc.id = t.id;
+    rc.bbox = t.bbox;
+    rc.hist = t.hist.clone();
+    rc.ttl = RECENT_CAPTURE_TTL;
+    recent_captures.push_back(std::move(rc));
 }
 
 static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
@@ -188,9 +233,54 @@ static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
     return -1;
 }
 
+static int reuse_recent_capture_id(const Detection& det, const cv::Mat& det_hist) {
+    if (recent_captures.empty() || det_hist.empty()) {
+        return -1;
+    }
+
+    cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
+    float best_score = -1.0f;
+    int best_idx = -1;
+
+    for (int i = 0; i < static_cast<int>(recent_captures.size()); ++i) {
+        const auto& rc = recent_captures[i];
+        if (rc.hist.empty()) {
+            continue;
+        }
+
+        float hist_score = hist_distance(rc.hist, det_hist);
+        float iou_score = iou(rc.bbox, det_rect);
+        float center_dist = center_distance_norm(rc.bbox, det_rect);
+        float center_score = 1.0f - std::min(1.0f, center_dist / 0.18f);
+
+        if (hist_score > 0.34f) {
+            continue;
+        }
+        if (iou_score < 0.06f && center_dist > 0.12f) {
+            continue;
+        }
+
+        float score = (1.0f - hist_score) * 0.55f + center_score * 0.30f + iou_score * 0.15f;
+        if (score > best_score) {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+
+    if (best_idx != -1 && best_score >= 0.67f) {
+        int reused_id = recent_captures[best_idx].id;
+        recent_captures.erase(recent_captures.begin() + best_idx);
+        log_debug("Reuse recent captured id: %d (score=%.3f)", reused_id, best_score);
+        return reused_id;
+    }
+
+    return -1;
+}
+
 static size_t select_best_frame_index(const std::vector<Track::FrameData>& frames) {
     size_t best_index = SIZE_MAX;
-    bool found_frontal = false;
+    int best_pose_level = -1;
+    bool best_strong_candidate = false;
     float best_yaw = 1e6f;
     double best_score = -1e12;
     float best_occlusion = 1e6f;
@@ -204,7 +294,7 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
 
     for (size_t i = 0; i < frames.size(); ++i) {
         const auto& frame = frames[i];
-        if (!frame.has_face) {
+        if (!frame.has_face || frame.face_pose_level < 1) {
             continue;
         }
 
@@ -214,37 +304,46 @@ static size_t select_best_frame_index(const std::vector<Track::FrameData>& frame
         bool clearly_lower_motion = similar_blur && frame.motion_ratio < best_motion - 0.003f;
         bool similar_motion = similar_blur && std::fabs(frame.motion_ratio - best_motion) <= 0.003f;
 
-        if (frame.is_frontal) {
-            if (!found_frontal ||
-                clearly_lower_blur ||
-                (similar_blur && clearly_lower_motion) ||
-                (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
-                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
-                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.yaw_abs < best_yaw - 1e-6f) ||
-                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f && frame.score > best_score)) {
-                found_frontal = true;
-                best_blur = frame.blur_severity;
-                best_occlusion = frame_occlusion;
-                best_motion = frame.motion_ratio;
-                best_clarity = frame.clarity;
-                best_yaw = frame.yaw_abs;
-                best_score = frame.score;
-                best_index = i;
+        bool better = false;
+        if (best_index == SIZE_MAX || frame.face_pose_level > best_pose_level) {
+            better = true;
+        } else if (frame.face_pose_level == best_pose_level) {
+            if (frame.strong_candidate != best_strong_candidate) {
+                better = frame.strong_candidate && !best_strong_candidate;
+            } else if (clearly_lower_blur) {
+                better = true;
+            } else if (similar_blur && clearly_lower_motion) {
+                better = true;
+            } else if (similar_motion && frame_occlusion < best_occlusion - 0.02f) {
+                better = true;
+            } else if (similar_motion &&
+                       std::fabs(frame_occlusion - best_occlusion) <= 0.02f &&
+                       frame.clarity > best_clarity + 1e-6f) {
+                better = true;
+            } else if (similar_motion &&
+                       std::fabs(frame_occlusion - best_occlusion) <= 0.02f &&
+                       std::fabs(frame.clarity - best_clarity) <= 1e-6f &&
+                       frame.yaw_abs < best_yaw - 1e-6f) {
+                better = true;
+            } else if (similar_motion &&
+                       std::fabs(frame_occlusion - best_occlusion) <= 0.02f &&
+                       std::fabs(frame.clarity - best_clarity) <= 1e-6f &&
+                       std::fabs(frame.yaw_abs - best_yaw) <= 1e-6f &&
+                       frame.score > best_score) {
+                better = true;
             }
-        } else if (!found_frontal) {
-            if (best_index == SIZE_MAX ||
-                clearly_lower_blur ||
-                (similar_blur && clearly_lower_motion) ||
-                (similar_motion && frame_occlusion < best_occlusion - 0.02f) ||
-                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && frame.clarity > best_clarity + 1e-6f) ||
-                (similar_motion && std::fabs(frame_occlusion - best_occlusion) <= 0.02f && std::fabs(frame.clarity - best_clarity) <= 1e-6f && frame.score > best_score)) {
-                best_blur = frame.blur_severity;
-                best_occlusion = frame_occlusion;
-                best_motion = frame.motion_ratio;
-                best_clarity = frame.clarity;
-                best_score = frame.score;
-                best_index = i;
-            }
+        }
+
+        if (better) {
+            best_pose_level = frame.face_pose_level;
+            best_strong_candidate = frame.strong_candidate;
+            best_blur = frame.blur_severity;
+            best_occlusion = frame_occlusion;
+            best_motion = frame.motion_ratio;
+            best_clarity = frame.clarity;
+            best_yaw = frame.yaw_abs;
+            best_score = frame.score;
+            best_index = i;
         }
     }
 
@@ -299,9 +398,13 @@ static int update_pending_track(const Detection& det, const cv::Mat& det_hist) {
 
     if (pt.hits >= PENDING_TRACK_HITS_REQUIRED) {
         int reused_id = reuse_lost_track_id(det, det_hist);
+        if (reused_id <= 0) {
+            reused_id = reuse_recent_capture_id(det, det_hist);
+        }
         int assigned_id = (reused_id > 0) ? reused_id : next_id++;
+        bool already_captured = is_track_already_captured(assigned_id);
 
-        tracks.push_back(create_track(det, assigned_id));
+        tracks.push_back(create_track(det, assigned_id, already_captured));
         pending_tracks.erase(pending_tracks.begin() + best_idx);
         return assigned_id;
     }
@@ -434,7 +537,7 @@ static void correct_track(Track& t, const Detection& det) {
 
 //-----------------新建Track-----------------
 
-static Track create_track(const Detection& det, int id) {
+static Track create_track(const Detection& det, int id, bool already_captured) {
     Track t;
     t.id = id;
 
@@ -455,7 +558,7 @@ static Track create_track(const Detection& det, int id) {
     t.is_approaching = false;
     t.best_area = 0.0f;
     t.best_clarity = 0.0;
-    t.has_captured = false;
+    t.has_captured = already_captured;
     return t;
 }
 
@@ -473,7 +576,37 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
 
     std::unique_lock<std::mutex> lock(tracks_mutex);
     age_lost_tracks();
+    age_recent_captures();
     age_pending_tracks();
+
+    auto queue_upload_if_needed = [&](const Track& t) {
+        if (!upload_callback || t.frame_candidates.empty() || !captured_person_ids || !captured_face_ids) {
+            log_debug("Track %d upload conditions not met", t.id);
+            if (is_track_already_captured(t.id)) {
+                remember_recent_capture(t);
+            }
+            return;
+        }
+
+        if (is_track_already_captured(t.id)) {
+            remember_recent_capture(t);
+            log_debug("Track %d already captured, refresh recent cache only", t.id);
+            return;
+        }
+
+        size_t best_index = select_best_frame_index(t.frame_candidates);
+        if (best_index == SIZE_MAX) {
+            log_debug("Track %d skipped upload: no frontal-quality candidate", t.id);
+            return;
+        }
+
+        const auto& best_frame = t.frame_candidates[best_index];
+        float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
+        pendingUploads.push_back({t.id, best_frame, occ});
+        captured_person_ids->insert(t.id);
+        captured_face_ids->insert(t.id);
+        remember_recent_capture(t);
+    };
 
     // 预测所有track
     for (auto& t : tracks) predict_track(t);
@@ -501,25 +634,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                     [&](const Track& t){
                         if(t.missed > MAX_MISSED){
                             cache_lost_track(t);
-                            
-                            if (upload_callback && !t.frame_candidates.empty() && 
-                                captured_person_ids && captured_face_ids &&
-                                captured_person_ids->find(t.id) == captured_person_ids->end() &&
-                                captured_face_ids->find(t.id) == captured_face_ids->end()) {
-                                
-                                size_t best_index = select_best_frame_index(t.frame_candidates);
-                                if (best_index != SIZE_MAX) {
-                                    const auto& best_frame = t.frame_candidates[best_index];
-                                    float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
-                                    pendingUploads.push_back({t.id, best_frame, occ});
-                                    
-                                    captured_person_ids->insert(t.id);
-                                    captured_face_ids->insert(t.id);
-                                }
-                            } else {
-                                log_debug("Track %d upload conditions not met", t.id);
-                            }
-                            
+                            queue_upload_if_needed(t);
                             return true;
                         }
                         return false;
@@ -623,25 +738,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                 [&](const Track& t){
                     if(t.missed > MAX_MISSED){
                         cache_lost_track(t);
-                        
-                        if (upload_callback && !t.frame_candidates.empty() && 
-                            captured_person_ids && captured_face_ids &&
-                            captured_person_ids->find(t.id) == captured_person_ids->end() &&
-                            captured_face_ids->find(t.id) == captured_face_ids->end()) {
-                            
-                            size_t best_index = select_best_frame_index(t.frame_candidates);
-                            if (best_index != SIZE_MAX) {
-                                const auto& best_frame = t.frame_candidates[best_index];
-                                float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
-                                pendingUploads.push_back({t.id, best_frame, occ});
-                                
-                                captured_person_ids->insert(t.id);
-                                captured_face_ids->insert(t.id);
-                            }
-                        } else {
-                            log_debug("Track %d upload conditions not met", t.id);
-                        }
-                        
+                        queue_upload_if_needed(t);
                         return true;
                     }
                     return false;
