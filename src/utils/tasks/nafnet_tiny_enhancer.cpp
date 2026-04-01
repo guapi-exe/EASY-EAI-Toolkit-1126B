@@ -1,5 +1,7 @@
 #include "nafnet_tiny_enhancer.h"
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>

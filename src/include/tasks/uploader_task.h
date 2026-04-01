@@ -3,7 +3,7 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
 #include <string>
 #include <atomic>
 #include <functional>

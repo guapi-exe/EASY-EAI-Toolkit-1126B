@@ -1,5 +1,6 @@
 #pragma once
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/core/types.hpp>
 #include "device_config.h"
 #include "rknn_api.h"
 #include "main.h"

@@ -3,7 +3,10 @@
 #include "person_detect.h"
 #include "face_detect.h"
 #include "sort_tracker.h"
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <fstream>
+#include <cmath>
 #include <cstdio>
 #include <dirent.h>
 #include <linux/videodev2.h>

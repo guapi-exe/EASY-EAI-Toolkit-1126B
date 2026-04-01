@@ -1,7 +1,7 @@
 #ifndef SEND_DATA_H
 #define SEND_DATA_H
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
 #include <string>
 #include <vector>
 #include <iostream>

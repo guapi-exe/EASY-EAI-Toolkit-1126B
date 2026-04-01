@@ -1,5 +1,5 @@
 #include "send_data.h"
-#include <opencv2/opencv.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <string>
 #include <vector>
 #include <iostream>

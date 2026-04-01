@@ -1,8 +1,10 @@
 #include "sort_tracker.h"
 #include <vector>
 #include "main.h"
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include "tinyekf.h"
 #include <functional>
