@@ -47,7 +47,6 @@ private:
         float areaRatio;
         float personOcclusion;
         float motionRatio;
-        float sceneBrightness;
     };
 
     void run();

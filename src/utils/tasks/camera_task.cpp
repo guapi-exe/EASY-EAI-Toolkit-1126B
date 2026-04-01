@@ -46,6 +46,15 @@ struct AdaptiveCaptureThresholds {
     float fallbackMaxBlurSeverity{CAPTURE_FALLBACK_MAX_BLUR_SEVERITY};
 };
 
+constexpr double kLowLightBrightnessThreshold = 92.0;
+constexpr double kLowLightBrightnessFloor = 58.0;
+constexpr float kLowLightMotionRatioScale = 0.72f;
+constexpr float kLowLightMotionRejectRatioScale = 0.60f;
+constexpr float kLowLightMaxBlurSeverityScale = 0.82f;
+constexpr float kLowLightFallbackMaxBlurSeverityScale = 0.74f;
+constexpr float kLowLightMinClarityScale = 1.10f;
+constexpr float kLowLightFallbackMinClarityScale = 1.18f;
+
 float clampUnit(float value) {
     return std::max(0.0f, std::min(1.0f, value));
 }
@@ -72,9 +81,9 @@ AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::Cap
         return thresholds;
     }
 
-    double low_light_start = std::max(config.lowLightBrightnessThreshold,
-                                      config.lowLightBrightnessFloor + 1.0);
-    double low_light_floor = std::min(config.lowLightBrightnessFloor,
+    double low_light_start = std::max(kLowLightBrightnessThreshold,
+                                      kLowLightBrightnessFloor + 1.0);
+    double low_light_floor = std::min(kLowLightBrightnessFloor,
                                       low_light_start - 1.0);
     double range = std::max(8.0, low_light_start - low_light_floor);
 
@@ -85,26 +94,26 @@ AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::Cap
 
     thresholds.lowLightStrength = low_light_strength;
     thresholds.minClarity = lerpDouble(config.minClarity,
-                                       config.minClarity * config.lowLightMinClarityScale,
+                                       config.minClarity * kLowLightMinClarityScale,
                                        low_light_strength);
     thresholds.fallbackMinClarity = lerpDouble(config.fallbackMinClarity,
-                                               config.fallbackMinClarity * config.lowLightFallbackMinClarityScale,
+                                               config.fallbackMinClarity * kLowLightFallbackMinClarityScale,
                                                low_light_strength);
     thresholds.maxMotionRatio = std::max(0.0015f,
                                          lerpFloat(config.maxMotionRatio,
-                                                   config.maxMotionRatio * config.lowLightMotionRatioScale,
+                                                   config.maxMotionRatio * kLowLightMotionRatioScale,
                                                    low_light_strength));
     thresholds.maxMotionRejectRatio = std::max(thresholds.maxMotionRatio + 0.003f,
                                                lerpFloat(config.maxMotionRejectRatio,
-                                                         config.maxMotionRejectRatio * config.lowLightMotionRejectRatioScale,
+                                                         config.maxMotionRejectRatio * kLowLightMotionRejectRatioScale,
                                                          low_light_strength));
     thresholds.maxBlurSeverity = std::max(0.12f,
                                           lerpFloat(config.maxBlurSeverity,
-                                                    config.maxBlurSeverity * config.lowLightMaxBlurSeverityScale,
+                                                    config.maxBlurSeverity * kLowLightMaxBlurSeverityScale,
                                                     low_light_strength));
     thresholds.fallbackMaxBlurSeverity = std::max(thresholds.maxBlurSeverity + 0.04f,
                                                   lerpFloat(config.fallbackMaxBlurSeverity,
-                                                            config.fallbackMaxBlurSeverity * config.lowLightFallbackMaxBlurSeverityScale,
+                                                            config.fallbackMaxBlurSeverity * kLowLightFallbackMaxBlurSeverityScale,
                                                             low_light_strength));
     return thresholds;
 }
@@ -716,8 +725,9 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
 
         if (!job.personRoi.empty() && job.personRoi.cols > 0 && job.personRoi.rows > 0) {
             DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
+            double sceneBrightness = environmentBrightness.load();
             AdaptiveCaptureThresholds adaptiveThresholds =
-                buildAdaptiveCaptureThresholds(config, job.sceneBrightness);
+                buildAdaptiveCaptureThresholds(config, sceneBrightness);
             Mat person_roi_resized;
             int target_width = min(config.faceInputMaxWidth, job.personRoi.cols);
             int target_height = static_cast<int>(job.personRoi.rows * target_width / (float)job.personRoi.cols);
@@ -959,7 +969,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                           face_edge_occlusion,
                                                           current_blur_severity,
                                                           job.motionRatio,
-                                                          job.sceneBrightness,
+                                                          sceneBrightness,
                                                           adaptiveThresholds.lowLightStrength);
                                             const char* reason = "quality_gate";
                                             if (config.requireFrontalFace && !weak_frontal_ok) {
@@ -1576,7 +1586,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         job.areaRatio = area_ratio;
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;
-        job.sceneBrightness = static_cast<float>(sceneBrightness);
         if (enqueueCandidateEvaluation(std::move(job))) {
             clearTrackReject("gate", t.id);
         }

@@ -25,6 +25,14 @@ include_directories(${CURL_INCLUDE_DIRS})
 project(test_1)
 add_definitions(-Wall -Wpointer-arith)
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$"
+    AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12
+    AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+    message(WARNING "Applying GCC 12 aarch64 ICE workaround: lowering optimization and disabling vectorization")
+    add_compile_options(-O1 -fno-tree-vectorize -fno-tree-slp-vectorize)
+endif()
+
 # Find OpenCV package
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
