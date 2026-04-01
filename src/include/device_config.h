@@ -59,6 +59,14 @@ struct DeviceConfig {
         float maxBlurSeverity = CAPTURE_MAX_BLUR_SEVERITY;
         float fallbackMaxBlurSeverity = CAPTURE_FALLBACK_MAX_BLUR_SEVERITY;
         float blurSeverityScorePenalty = CAPTURE_BLUR_SEVERITY_SCORE_PENALTY;
+        double lowLightBrightnessThreshold = CAPTURE_LOW_LIGHT_BRIGHTNESS_THRESHOLD;
+        double lowLightBrightnessFloor = CAPTURE_LOW_LIGHT_BRIGHTNESS_FLOOR;
+        float lowLightMotionRatioScale = CAPTURE_LOW_LIGHT_MOTION_RATIO_SCALE;
+        float lowLightMotionRejectRatioScale = CAPTURE_LOW_LIGHT_MOTION_REJECT_RATIO_SCALE;
+        float lowLightMaxBlurSeverityScale = CAPTURE_LOW_LIGHT_MAX_BLUR_SEVERITY_SCALE;
+        float lowLightFallbackMaxBlurSeverityScale = CAPTURE_LOW_LIGHT_FALLBACK_MAX_BLUR_SEVERITY_SCALE;
+        float lowLightMinClarityScale = CAPTURE_LOW_LIGHT_MIN_CLARITY_SCALE;
+        float lowLightFallbackMinClarityScale = CAPTURE_LOW_LIGHT_FALLBACK_MIN_CLARITY_SCALE;
         int brightnessSampleInterval = CAMERA_BRIGHTNESS_SAMPLE_INTERVAL;
         double brightnessWhiteThreshold = CAMERA_BRIGHTNESS_WHITE_THRESHOLD;
         double brightnessBlackThreshold = CAMERA_BRIGHTNESS_BLACK_THRESHOLD;

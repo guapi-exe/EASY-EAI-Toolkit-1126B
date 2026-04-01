@@ -2,6 +2,7 @@
   "workspaceName": "Test-CAM-1126B",
   "targetWorkflowFile": "workflows/test-cam-1126b/main.workflow.json",
   "promptFile": ".workflow-designer/copilot/workspace-analysis.prompt.md",
+  "resultFile": ".workflow-designer/copilot/workspace-analysis.result.flow.txt",
   "manifestFile": ".workflow-designer/copilot/workspace-analysis.manifest.json",
-  "generatedAt": "2026-03-31T08:45:20.257Z"
+  "generatedAt": "2026-03-31T14:07:38.691Z"
 }

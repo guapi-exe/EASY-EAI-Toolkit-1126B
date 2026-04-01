@@ -148,6 +148,14 @@ static json buildDefaultJson(const DeviceConfig& cfg) {
         {"max_blur_severity", configFloat(cfg.captureDefaults.maxBlurSeverity)},
         {"fallback_max_blur_severity", configFloat(cfg.captureDefaults.fallbackMaxBlurSeverity)},
         {"blur_severity_score_penalty", configFloat(cfg.captureDefaults.blurSeverityScorePenalty)},
+        {"low_light_brightness_threshold", configFloat(cfg.captureDefaults.lowLightBrightnessThreshold)},
+        {"low_light_brightness_floor", configFloat(cfg.captureDefaults.lowLightBrightnessFloor)},
+        {"low_light_motion_ratio_scale", configFloat(cfg.captureDefaults.lowLightMotionRatioScale)},
+        {"low_light_motion_reject_ratio_scale", configFloat(cfg.captureDefaults.lowLightMotionRejectRatioScale)},
+        {"low_light_max_blur_severity_scale", configFloat(cfg.captureDefaults.lowLightMaxBlurSeverityScale)},
+        {"low_light_fallback_max_blur_severity_scale", configFloat(cfg.captureDefaults.lowLightFallbackMaxBlurSeverityScale)},
+        {"low_light_min_clarity_scale", configFloat(cfg.captureDefaults.lowLightMinClarityScale)},
+        {"low_light_fallback_min_clarity_scale", configFloat(cfg.captureDefaults.lowLightFallbackMinClarityScale)},
         {"brightness_sample_interval", cfg.captureDefaults.brightnessSampleInterval},
         {"brightness_white_threshold", configFloat(cfg.captureDefaults.brightnessWhiteThreshold)},
         {"brightness_black_threshold", configFloat(cfg.captureDefaults.brightnessBlackThreshold)}
@@ -285,6 +293,14 @@ static void loadFromJson(DeviceConfig* cfg, const json& j) {
         loadFloat("max_blur_severity", cfg->captureDefaults.maxBlurSeverity);
         loadFloat("fallback_max_blur_severity", cfg->captureDefaults.fallbackMaxBlurSeverity);
         loadFloat("blur_severity_score_penalty", cfg->captureDefaults.blurSeverityScorePenalty);
+        loadDouble("low_light_brightness_threshold", cfg->captureDefaults.lowLightBrightnessThreshold);
+        loadDouble("low_light_brightness_floor", cfg->captureDefaults.lowLightBrightnessFloor);
+        loadFloat("low_light_motion_ratio_scale", cfg->captureDefaults.lowLightMotionRatioScale);
+        loadFloat("low_light_motion_reject_ratio_scale", cfg->captureDefaults.lowLightMotionRejectRatioScale);
+        loadFloat("low_light_max_blur_severity_scale", cfg->captureDefaults.lowLightMaxBlurSeverityScale);
+        loadFloat("low_light_fallback_max_blur_severity_scale", cfg->captureDefaults.lowLightFallbackMaxBlurSeverityScale);
+        loadFloat("low_light_min_clarity_scale", cfg->captureDefaults.lowLightMinClarityScale);
+        loadFloat("low_light_fallback_min_clarity_scale", cfg->captureDefaults.lowLightFallbackMinClarityScale);
         loadInt("brightness_sample_interval", cfg->captureDefaults.brightnessSampleInterval);
         loadDouble("brightness_white_threshold", cfg->captureDefaults.brightnessWhiteThreshold);
         loadDouble("brightness_black_threshold", cfg->captureDefaults.brightnessBlackThreshold);

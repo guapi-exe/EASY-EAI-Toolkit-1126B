@@ -10,8 +10,8 @@
       "id": "docs-artifact",
       "type": "artifact",
       "title": "协议与问题文档",
-      "x": -1127,
-      "y": 178,
+      "x": 45,
+      "y": 754,
       "inputs": [],
       "outputs": [
         {
@@ -47,8 +47,8 @@
       "id": "algorithm-domain",
       "type": "domain",
       "title": "easyeai-api 算法与媒体域",
-      "x": -1030,
-      "y": 605,
+      "x": -98,
+      "y": 154,
       "inputs": [
         {
           "id": "module_catalog",
@@ -102,8 +102,8 @@
       "id": "hardware-domain",
       "type": "domain",
       "title": "commonApi 板端采集域",
-      "x": -646,
-      "y": 155,
+      "x": -53,
+      "y": -294,
       "inputs": [
         {
           "id": "board_interfaces",
@@ -149,8 +149,8 @@
       "id": "config-artifact",
       "type": "artifact",
       "title": "device_config.json 配置基线",
-      "x": -508,
-      "y": 1124,
+      "x": 1665,
+      "y": 176,
       "inputs": [
         {
           "id": "default_values",
@@ -202,8 +202,8 @@
       "id": "main-system",
       "type": "system",
       "title": "main.cpp 运行编排",
-      "x": -108,
-      "y": 1049,
+      "x": 362,
+      "y": 179,
       "inputs": [
         {
           "id": "boot_config",
@@ -256,8 +256,8 @@
       "id": "capture-service",
       "type": "service",
       "title": "CameraTask 抓拍筛选服务",
-      "x": -320,
-      "y": 341,
+      "x": 629,
+      "y": -322,
       "inputs": [
         {
           "id": "camera_frames",
@@ -323,8 +323,8 @@
       "id": "build-system",
       "type": "system",
       "title": "CMake 与脚本构建",
-      "x": 364,
-      "y": 1563,
+      "x": 509,
+      "y": 788,
       "inputs": [
         {
           "id": "source_tree",
@@ -375,8 +375,8 @@
       "id": "uploader-service",
       "type": "service",
       "title": "UploaderTask 上传增强服务",
-      "x": 44,
-      "y": 385,
+      "x": 1320,
+      "y": 811,
       "inputs": [
         {
           "id": "image_queue",
@@ -430,8 +430,8 @@
       "id": "tcp-api",
       "type": "api",
       "title": "TcpClient 设备协议 API",
-      "x": 437,
-      "y": 495,
+      "x": 1314,
+      "y": -329,
       "inputs": [
         {
           "id": "protocol_contract",
@@ -493,8 +493,8 @@
       "id": "validation-subflow",
       "type": "subflow",
       "title": "camera_test 与 streaming 验证子流程",
-      "x": 858,
-      "y": 1395,
+      "x": 840,
+      "y": 316,
       "inputs": [
         {
           "id": "built_binaries",
@@ -544,8 +544,8 @@
       "id": "research-task",
       "type": "task",
       "title": "暗光增强与去模糊研发任务",
-      "x": 665,
-      "y": 1004,
+      "x": 1277,
+      "y": 244,
       "inputs": [
         {
           "id": "quality_problem",
@@ -598,8 +598,8 @@
       "id": "release-artifact",
       "type": "artifact",
       "title": "Release 与板端交付工件",
-      "x": 1315,
-      "y": 1472,
+      "x": 883,
+      "y": 794,
       "inputs": [
         {
           "id": "built_release",

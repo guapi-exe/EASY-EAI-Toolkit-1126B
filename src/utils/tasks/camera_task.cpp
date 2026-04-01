@@ -36,6 +36,79 @@ constexpr int kIrCutConsecutiveHits = 3;
 constexpr int kIrCutSettleAfterSwitchSec = 8;
 constexpr int kRejectLogThrottleMs = 1500;
 
+struct AdaptiveCaptureThresholds {
+    float lowLightStrength{0.0f};
+    double minClarity{CAPTURE_MIN_CLARITY};
+    double fallbackMinClarity{CAPTURE_FALLBACK_MIN_CLARITY};
+    float maxMotionRatio{CAPTURE_MAX_MOTION_RATIO};
+    float maxMotionRejectRatio{CAPTURE_MAX_MOTION_REJECT_RATIO};
+    float maxBlurSeverity{CAPTURE_MAX_BLUR_SEVERITY};
+    float fallbackMaxBlurSeverity{CAPTURE_FALLBACK_MAX_BLUR_SEVERITY};
+};
+
+float clampUnit(float value) {
+    return std::max(0.0f, std::min(1.0f, value));
+}
+
+float lerpFloat(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+double lerpDouble(double a, double b, float t) {
+    return a + (b - a) * static_cast<double>(t);
+}
+
+AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::CaptureDefaults& config,
+                                                         double sceneBrightness) {
+    AdaptiveCaptureThresholds thresholds;
+    thresholds.minClarity = config.minClarity;
+    thresholds.fallbackMinClarity = config.fallbackMinClarity;
+    thresholds.maxMotionRatio = config.maxMotionRatio;
+    thresholds.maxMotionRejectRatio = config.maxMotionRejectRatio;
+    thresholds.maxBlurSeverity = config.maxBlurSeverity;
+    thresholds.fallbackMaxBlurSeverity = config.fallbackMaxBlurSeverity;
+
+    if (sceneBrightness <= 1.0) {
+        return thresholds;
+    }
+
+    double low_light_start = std::max(config.lowLightBrightnessThreshold,
+                                      config.lowLightBrightnessFloor + 1.0);
+    double low_light_floor = std::min(config.lowLightBrightnessFloor,
+                                      low_light_start - 1.0);
+    double range = std::max(8.0, low_light_start - low_light_floor);
+
+    float low_light_strength = 0.0f;
+    if (sceneBrightness < low_light_start) {
+        low_light_strength = clampUnit(static_cast<float>((low_light_start - sceneBrightness) / range));
+    }
+
+    thresholds.lowLightStrength = low_light_strength;
+    thresholds.minClarity = lerpDouble(config.minClarity,
+                                       config.minClarity * config.lowLightMinClarityScale,
+                                       low_light_strength);
+    thresholds.fallbackMinClarity = lerpDouble(config.fallbackMinClarity,
+                                               config.fallbackMinClarity * config.lowLightFallbackMinClarityScale,
+                                               low_light_strength);
+    thresholds.maxMotionRatio = std::max(0.0015f,
+                                         lerpFloat(config.maxMotionRatio,
+                                                   config.maxMotionRatio * config.lowLightMotionRatioScale,
+                                                   low_light_strength));
+    thresholds.maxMotionRejectRatio = std::max(thresholds.maxMotionRatio + 0.003f,
+                                               lerpFloat(config.maxMotionRejectRatio,
+                                                         config.maxMotionRejectRatio * config.lowLightMotionRejectRatioScale,
+                                                         low_light_strength));
+    thresholds.maxBlurSeverity = std::max(0.12f,
+                                          lerpFloat(config.maxBlurSeverity,
+                                                    config.maxBlurSeverity * config.lowLightMaxBlurSeverityScale,
+                                                    low_light_strength));
+    thresholds.fallbackMaxBlurSeverity = std::max(thresholds.maxBlurSeverity + 0.04f,
+                                                  lerpFloat(config.fallbackMaxBlurSeverity,
+                                                            config.fallbackMaxBlurSeverity * config.lowLightFallbackMaxBlurSeverityScale,
+                                                            low_light_strength));
+    return thresholds;
+}
+
 double updateFilteredBrightness(double prev, double raw) {
     if (prev < 0.0) {
         return raw;
@@ -643,6 +716,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
 
         if (!job.personRoi.empty() && job.personRoi.cols > 0 && job.personRoi.rows > 0) {
             DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
+            AdaptiveCaptureThresholds adaptiveThresholds =
+                buildAdaptiveCaptureThresholds(config, job.sceneBrightness);
             Mat person_roi_resized;
             int target_width = min(config.faceInputMaxWidth, job.personRoi.cols);
             int target_height = static_cast<int>(job.personRoi.rows * target_width / (float)job.personRoi.cols);
@@ -738,17 +813,20 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                             (roll < 32.0f && yaw < 0.48f && best_face.score >= config.minFaceScore && face_edge_occlusion < 0.72f);
                                         double current_clarity = computeFocusMeasure(job.personRoi(base_fbox));
                                         float current_blur_severity = computeMotionBlurSeverity(job.personRoi(base_fbox));
+                                        bool motion_gate_ok = job.motionRatio < adaptiveThresholds.maxMotionRatio;
                                         bool strong_candidate_ok =
                                             (!config.requireFrontalFace || frontal_relaxed_ok) &&
-                                            current_clarity > config.minClarity &&
-                                            current_blur_severity < config.maxBlurSeverity &&
-                                            yaw < config.maxYaw;
+                                            current_clarity > adaptiveThresholds.minClarity &&
+                                            current_blur_severity < adaptiveThresholds.maxBlurSeverity &&
+                                            yaw < config.maxYaw &&
+                                            motion_gate_ok;
                                         bool fallback_candidate_ok =
                                             (!config.requireFrontalFace || weak_frontal_ok) &&
-                                            current_clarity > config.fallbackMinClarity &&
-                                            current_blur_severity < config.fallbackMaxBlurSeverity &&
+                                            current_clarity > adaptiveThresholds.fallbackMinClarity &&
+                                            current_blur_severity < adaptiveThresholds.fallbackMaxBlurSeverity &&
                                             yaw < config.fallbackMaxYaw &&
-                                            face_edge_occlusion < config.fallbackMaxFaceEdgeOcclusion;
+                                            face_edge_occlusion < config.fallbackMaxFaceEdgeOcclusion &&
+                                            motion_gate_ok;
 
                                         if (strong_candidate_ok || fallback_candidate_ok) {
                                             int crop_w = std::max(1, static_cast<int>(base_fbox.width * config.headshotExpandRatio));
@@ -813,14 +891,14 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
 
                                                     float area_score = 1.0f / (1.0f + std::fabs(job.areaRatio - config.areaScoreTargetRatio) /
                                                                                         std::max(1e-6f, config.areaScoreTargetRatio));
-                                                    float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, config.minClarity)));
+                                                    float clarity_norm = static_cast<float>(std::min(1.8, current_clarity / std::max(1.0, adaptiveThresholds.minClarity)));
                                                     float person_occ_norm = job.personOcclusion / std::max(1e-6f, config.maxPersonOcclusion);
                                                     person_occ_norm = std::max(0.0f, std::min(1.5f, person_occ_norm));
                                                     float face_edge_occ_norm = face_edge_occlusion / std::max(1e-6f, config.maxFaceEdgeOcclusion);
                                                     face_edge_occ_norm = std::max(0.0f, std::min(1.5f, face_edge_occ_norm));
                                                     float occlusion_penalty = person_occ_norm * 0.7f + face_edge_occ_norm * 0.3f;
-                                                    float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, config.maxMotionRatio));
-                                                    float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, config.maxBlurSeverity));
+                                                    float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, adaptiveThresholds.maxMotionRatio));
+                                                    float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, adaptiveThresholds.maxBlurSeverity));
                                                     float candidate_penalty = strong_candidate_ok ? 0.0f : config.fallbackScorePenalty;
 
                                                     Track::FrameData frame_data;
@@ -870,22 +948,27 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                 logTrackReject("eval", job.trackId, "headshot_box_invalid", detail);
                                             }
                                         } else {
-                                            char detail[256];
+                                            char detail[320];
                                             std::snprintf(detail, sizeof(detail),
-                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f blur=%.2f",
+                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f blur=%.2f motion=%.4f bright=%.1f ll=%.2f",
                                                           frontal_ok ? 1 : 0,
                                                           frontal_relaxed_ok ? 1 : 0,
                                                           weak_frontal_ok ? 1 : 0,
                                                           yaw,
                                                           current_clarity,
                                                           face_edge_occlusion,
-                                                          current_blur_severity);
+                                                          current_blur_severity,
+                                                          job.motionRatio,
+                                                          job.sceneBrightness,
+                                                          adaptiveThresholds.lowLightStrength);
                                             const char* reason = "quality_gate";
                                             if (config.requireFrontalFace && !weak_frontal_ok) {
                                                 reason = "non_frontal";
-                                            } else if (current_clarity <= config.fallbackMinClarity) {
+                                            } else if (!motion_gate_ok) {
+                                                reason = "motion_soft_large";
+                                            } else if (current_clarity <= adaptiveThresholds.fallbackMinClarity) {
                                                 reason = "clarity_low";
-                                            } else if (current_blur_severity >= config.fallbackMaxBlurSeverity) {
+                                            } else if (current_blur_severity >= adaptiveThresholds.fallbackMaxBlurSeverity) {
                                                 reason = "motion_blur";
                                             } else if (yaw >= config.fallbackMaxYaw) {
                                                 reason = "yaw_large";
@@ -1239,6 +1322,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     static int personDetectCounter = 0;
     static std::vector<Track> cachedTracks;
     DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
+    double sceneBrightness = environmentBrightness.load();
+    AdaptiveCaptureThresholds adaptiveThresholds =
+        buildAdaptiveCaptureThresholds(config, sceneBrightness);
 
     const float inv_diag_720p = 1.0f / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
 
@@ -1454,12 +1540,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             logTrackReject("gate", t.id, "too_far", detail);
             continue;
         }
-        if (motion_ratio > config.maxMotionRejectRatio) {
-            char detail[192];
-            std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f",
+        if (motion_ratio > adaptiveThresholds.maxMotionRejectRatio) {
+            char detail[224];
+            std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f bright=%.1f ll=%.2f",
                           motion_ratio,
-                          config.maxMotionRejectRatio,
-                          area_ratio);
+                          adaptiveThresholds.maxMotionRejectRatio,
+                          area_ratio,
+                          sceneBrightness,
+                          adaptiveThresholds.lowLightStrength);
             logTrackReject("gate", t.id, "motion_large", detail);
             continue;
         }
@@ -1488,6 +1576,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         job.areaRatio = area_ratio;
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;
+        job.sceneBrightness = static_cast<float>(sceneBrightness);
         if (enqueueCandidateEvaluation(std::move(job))) {
             clearTrackReject("gate", t.id);
         }

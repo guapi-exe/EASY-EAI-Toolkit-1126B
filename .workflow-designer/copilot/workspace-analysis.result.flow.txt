@@ -1,0 +1,40 @@
+F|n=test-cam-1126b|r=main
+N|id=doc|t=artifact|n=需求与协议约束|o=spec:质量约束;proto:TCP协议|g=统一抓拍质量目标与设备通信契约|l=documentation|r=documentation|d=仓库无 README 与 package manifest，当前交付约束主要来自问题文档和 TCP 协议说明|c=问题，解决方案，实际.md;src/TCP_PROTOCOL.md|k=quality target;TCP JSON line protocol
+N|id=hw|t=domain|n=commonApi 板端采集域|o=src:板端源码;cam:相机采集;gpio:IR-CUT控制|g=提供 MIPI 相机与 GPIO 基础能力|l=edge-runtime|r=device-domain|d=src/commonApi 封装 camera、mipi_camera、gpio、uart、usb_camera 与 DMA 等板端接口|c=src/commonApi;src/commonApi/camera.h;src/commonApi/mipi_camera.c|k=MIPI;GPIO;IR-CUT
+N|id=ai|t=domain|n=easyeai-api 算法与媒体域|o=src:算法源码;alg:检测能力|g=提供 RKNN 检测、RGA 与 GStreamer 能力|l=domain|r=algorithm-toolkit|d=easyeai-api 汇聚 person_detect、face_detect、face_detect_retian、face_detect_scrfd 与 media 模块|c=easyeai-api/algorithm;easyeai-api/media|k=RKNN;RGA;GStreamer;OpenCV
+N|id=cfg|t=artifact|n=device_config 配置基线|i=upd:配置更新|o=run:启动参数;rule:抓拍阈值;net:网络与上传|g=持久化设备编号、上传地址、TCP 与抓拍参数|l=config|r=runtime-config|d=启动时自动创建 device_config.json，并在 config_update 后回写缺失字段和最新参数|c=src/include/device_config.h;src/utils/device_config.cpp|ok=缺字段自动补齐;config_update 可落盘|k=JSON;nlohmann::json
+N|id=app|t=system|n=main 运行编排|i=cfg:启动配置;ctl:远程命令|o=cap:抓拍编排;upl:上传编排;tcp:通信编排;entry:主程序源码|g=编排采集、上传、配置与远程控制为长期运行进程|l=application|r=application-entry|d=src/main.cpp 在 debug 与 normal 模式切换上传路径，并注册抓拍、上传和 TcpClient 回调|c=src/main.cpp;src/include/main.h|k=main.cpp;callback wiring
+N|id=cap|t=service|n=抓拍与筛选服务|i=ctrl:任务编排;cam:相机采集;gpio:IR-CUT控制;alg:检测能力;rule:抓拍阈值;qual:质量约束|o=img:候选图像;evt:场景事件;src:服务源码|g=把连续视频流筛成可上传人像，并执行亮度补偿与 IR-CUT 切换|l=runtime-service|r=capture-service|d=CameraTask 结合检测、跟踪、brightness boost、模糊过滤与 IR-CUT 产出抓拍候选|c=src/include/tasks/camera_task.h;src/utils/tasks/camera_task.cpp|k=CameraTask;SORT;brightness boost;motion blur
+N|id=upl|t=service|n=上传增强服务|i=ctrl:上传编排;img:候选图像;net:上传参数|o=http:HTTP图片上传;done:上传完成;src:服务源码|g=压缩增强候选图并提交上传接口|l=integration|r=upload-service|d=UploaderTask 负责 JPEG 压缩、face enhancement、上传队列和成功回调|c=src/include/tasks/uploader_task.h;src/utils/tasks/uploader_task.cpp|ok=上传成功触发结果回调;队列有上限保护|k=CURL;JPEG;face enhancement
+N|id=tcp|t=api|n=TcpClient 设备协议 API|i=ctrl:通信编排;evt:设备事件;proto:协议约束;net:网络参数|o=cmd:远程命令;cfg:配置回写;hb:注册与心跳;src:服务源码|g=维持设备与服务端的 JSON line 通道|l=integration|r=external-api|d=TcpClient 负责 register、heartbeat、event、reconnect 与 config_update|c=src/include/tcp_client.h;src/utils/tcp_client.cpp;src/TCP_PROTOCOL.md|ok=支持 sleep、wake、capture、config_update|k=TCP;JSON line protocol
+N|id=build|t=task|n=构建与打包任务|i=doc:交付约束;hw:板端源码;ai:算法源码;app:应用入口;cap:抓拍源码;upl:上传源码;tcp:协议源码|o=bin:主程序与测试程序;pkg:Release目录|g=用 CMake 与脚本生成 main 和 camera_test_advanced，并可复制到板端目录|l=build|r=build-orchestration|d=src/CMakeLists.txt 引入 OpenCV、CURL 与 easyeai-api 模块，src/build.sh 重新生成 build 与 Release 目录|c=src/CMakeLists.txt;src/build.sh|a=cmake;make -j1;copy to SYSROOT|ok=产出 main;产出 camera_test_advanced|k=CMake;cross.cmake;OpenCV;CURL
+N|id=qa|t=task|n=板端相机验证|i=bin:测试程序;cam:相机采集;qual:质量约束|o=proof:FPS与清晰度证据|g=验证取帧、缩放和清晰度是否满足现场约束|l=verification|r=field-validation|d=camera_test_advanced 提供 save、clarity、resize 选项并输出统计结果|c=src/camera_test_advanced.cpp|a=save;clarity;resize|k=OpenCV;FPS;clarity
+N|id=rel|t=task|n=板端更新与交付|i=pkg:Release目录;proof:验证证据|o=board:板端更新流程|g=把目标版本同步到板端并执行受控重建交付|l=delivery|r=release-task|d=src/update.sh 会 fetch、reset、授权脚本并调用 build.sh，适合板端统一更新|c=src/update.sh|a=git fetch --all;git reset --hard origin/master;./build.sh|k=git;board update
+E|f=doc.spec|t=cap.qual|r=feeds_context_to
+E|f=doc.proto|t=tcp.proto|r=feeds_context_to
+E|f=doc.spec|t=build.doc|r=feeds_context_to
+E|f=doc.spec|t=qa.qual|r=feeds_context_to
+E|f=hw.cam|t=cap.cam|r=depends_on
+E|f=hw.gpio|t=cap.gpio|r=depends_on
+E|f=ai.alg|t=cap.alg|r=depends_on
+E|f=cfg.run|t=app.cfg|r=reads
+E|f=cfg.rule|t=cap.rule|r=reads
+E|f=cfg.net|t=upl.net|r=reads
+E|f=cfg.net|t=tcp.net|r=reads
+E|f=tcp.cmd|t=app.ctl|r=produces
+E|f=app.cap|t=cap.ctrl|r=calls
+E|f=app.upl|t=upl.ctrl|r=calls
+E|f=app.tcp|t=tcp.ctrl|r=calls
+E|f=cap.img|t=upl.img|r=produces
+E|f=cap.evt|t=tcp.evt|r=produces
+E|f=upl.done|t=tcp.evt|r=produces
+E|f=tcp.cfg|t=cfg.upd|r=writes
+E|f=hw.src|t=build.hw|r=depends_on
+E|f=ai.src|t=build.ai|r=depends_on
+E|f=app.entry|t=build.app|r=depends_on
+E|f=cap.src|t=build.cap|r=depends_on
+E|f=upl.src|t=build.upl|r=depends_on
+E|f=tcp.src|t=build.tcp|r=depends_on
+E|f=build.bin|t=qa.bin|r=produces
+E|f=build.pkg|t=rel.pkg|r=produces
+E|f=qa.proof|t=rel.proof|r=depends_on
