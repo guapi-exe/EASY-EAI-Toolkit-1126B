@@ -101,6 +101,8 @@
 #define CAPTURE_BLUR_SEVERITY_SCORE_PENALTY 380.0f
 // 低照度自适应防模糊：亮度低于 threshold 后，逐步收紧运动/模糊/清晰度门槛；到 floor 时收紧到最严格。
 #define CAPTURE_LOW_LIGHT_BRIGHTNESS_THRESHOLD 92.0
+// Low-light anti-blur tuning: tighten motion/blur/clarity gates when the scene gets dark.
+#define CAPTURE_LOW_LIGHT_BRIGHTNESS_THRESHOLD 92.0
 #define CAPTURE_LOW_LIGHT_BRIGHTNESS_FLOOR     58.0
 #define CAPTURE_LOW_LIGHT_MOTION_RATIO_SCALE   0.72f
 #define CAPTURE_LOW_LIGHT_MOTION_REJECT_RATIO_SCALE 0.60f
