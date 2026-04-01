@@ -5,6 +5,7 @@ extern "C" {
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/photo.hpp>
 #include <curl/curl.h>
 #include <random>
 #include <cmath>
