@@ -1,4 +1,4 @@
-#include "sort_tracker.h"
+﻿#include "sort_tracker.h"
 #include <vector>
 #include "main.h"
 #include <opencv2/core.hpp>
@@ -56,6 +56,9 @@ static constexpr float TRACK_RECOVER_SIZE_ALPHA = 0.40f;
 static constexpr float TRACK_NEW_CENTER_ALPHA = 0.72f;
 static constexpr float TRACK_NEW_SIZE_ALPHA = 0.50f;
 static constexpr float TRACK_BBOX_JITTER_ALPHA = 0.28f;
+static float g_capture_min_area_ratio = CAPTURE_MIN_AREA_RATIO;
+static float g_capture_near_area_ratio = CAPTURE_NEAR_AREA_RATIO;
+static float g_capture_max_person_occlusion = CAPTURE_MAX_PERSON_OCCLUSION;
 
 static Track create_track(const Detection& det, int id, bool already_captured = false);
 
@@ -121,7 +124,7 @@ void sort_init() {
     next_id = 1; 
 }
 
-// 添加上传回调函数指针
+// 娣诲姞涓婁紶鍥炶皟鍑芥暟鎸囬拡
 static std::function<void(const cv::Mat&, int, const std::string&)> upload_callback = nullptr;
 static std::unordered_set<int>* captured_person_ids = nullptr;
 static std::unordered_set<int>* captured_face_ids = nullptr;
@@ -138,9 +141,31 @@ void set_max_frame_candidates(size_t maxFrameCandidates) {
     g_max_frame_candidates = std::max<size_t>(1, maxFrameCandidates);
 }
 
-static bool is_track_already_captured(int track_id) {
-    return (captured_person_ids && captured_person_ids->find(track_id) != captured_person_ids->end()) ||
-           (captured_face_ids && captured_face_ids->find(track_id) != captured_face_ids->end());
+void set_capture_sort_preferences(float minAreaRatio,
+                                  float nearAreaRatio,
+                                  float maxPersonOcclusion) {
+    std::lock_guard<std::mutex> lock(tracks_mutex);
+    g_capture_min_area_ratio = std::max(0.001f, minAreaRatio);
+    g_capture_near_area_ratio = std::max(g_capture_min_area_ratio, nearAreaRatio);
+    g_capture_max_person_occlusion = std::max(0.05f, maxPersonOcclusion);
+}
+
+static bool is_track_person_captured(int track_id) {
+    return captured_person_ids &&
+           captured_person_ids->find(track_id) != captured_person_ids->end();
+}
+
+static bool is_track_face_captured(int track_id) {
+    return captured_face_ids &&
+           captured_face_ids->find(track_id) != captured_face_ids->end();
+}
+
+static bool is_track_fully_captured(int track_id) {
+    return is_track_person_captured(track_id) && is_track_face_captured(track_id);
+}
+
+static bool has_track_uploaded_asset(int track_id) {
+    return is_track_person_captured(track_id) || is_track_face_captured(track_id);
 }
 
 static float iou(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -238,7 +263,7 @@ static void cache_lost_track(const Track& t) {
 }
 
 static void remember_recent_capture(const Track& t) {
-    if (!is_track_already_captured(t.id) || t.hist.empty()) {
+    if (!has_track_uploaded_asset(t.id) || t.hist.empty()) {
         return;
     }
 
@@ -341,116 +366,199 @@ static int reuse_recent_capture_id(const Detection& det, const cv::Mat& det_hist
     return -1;
 }
 
-static size_t select_best_frame_index(const std::vector<Track::FrameData>& frames) {
-    size_t best_index = SIZE_MAX;
+static bool is_usable_face_frame(const Track::FrameData& frame) {
+    return frame.has_face && frame.face_pose_level >= 1 && !frame.face_roi.empty();
+}
 
-    auto occlusion_of = [](const Track::FrameData& frame) {
-        return frame.person_occlusion * 0.7f + frame.face_edge_occlusion * 0.3f;
-    };
+static float frame_occlusion(const Track::FrameData& frame) {
+    return frame.person_occlusion * 0.6f + frame.face_edge_occlusion * 0.4f;
+}
 
-    auto capture_priority = [&](const Track::FrameData& frame) {
-        float occ = occlusion_of(frame);
-        float pose_bonus = frame.face_pose_level >= 2 ? 140.0f : 70.0f;
-        float strong_bonus = frame.strong_candidate ? 90.0f : 0.0f;
-        float clarity_bonus = static_cast<float>(frame.clarity * 0.42);
-        float blur_penalty = frame.blur_severity * 85.0f;
-        float motion_penalty = frame.motion_ratio * 22000.0f;
-        float occlusion_penalty = occ * 90.0f;
-        float yaw_penalty = frame.yaw_abs * 65.0f;
-        return frame.score + pose_bonus + strong_bonus + clarity_bonus -
-               blur_penalty - motion_penalty - occlusion_penalty - yaw_penalty;
-    };
+static float near_ratio_score(const Track::FrameData& frame) {
+    return frame.area_ratio / std::max(1e-6f, g_capture_near_area_ratio);
+}
 
-    auto better_for_capture = [&](const Track::FrameData& candidate, const Track::FrameData& current) {
-        if (!candidate.has_face || candidate.face_pose_level < 1) {
+static double face_capture_priority(const Track::FrameData& frame) {
+    float occ = frame_occlusion(frame);
+    float near_ratio = near_ratio_score(frame);
+    float pose_bonus = frame.face_pose_level >= 2 ? 150.0f : 82.0f;
+    float strong_bonus = frame.strong_candidate ? 95.0f : 0.0f;
+    float clarity_bonus = static_cast<float>(frame.clarity * 0.46);
+    float near_bonus = std::min(1.8f, near_ratio) * 180.0f;
+    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 240.0f : 0.0f;
+    float blur_penalty = frame.blur_severity * 95.0f;
+    float motion_penalty = frame.motion_ratio * 24000.0f;
+    float occ_penalty = frame.person_occlusion * 120.0f + frame.face_edge_occlusion * 150.0f;
+    float yaw_penalty = frame.yaw_abs * 72.0f;
+    return frame.score + pose_bonus + strong_bonus + clarity_bonus + near_bonus -
+           blur_penalty - motion_penalty - occ_penalty - yaw_penalty - far_penalty -
+           occ * 25.0f;
+}
+
+static double person_capture_priority(const Track::FrameData& frame) {
+    float near_ratio = near_ratio_score(frame);
+    float near_bonus = std::min(1.8f, near_ratio) * 220.0f;
+    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 300.0f : 0.0f;
+    float clarity_bonus = static_cast<float>(frame.clarity * 0.34);
+    float blur_penalty = frame.blur_severity * 88.0f;
+    float motion_penalty = frame.motion_ratio * 20000.0f;
+    float occ_penalty = frame.person_occlusion * 165.0f;
+    float face_hint_bonus = is_usable_face_frame(frame) ? 35.0f : 0.0f;
+    return frame.score + near_bonus + clarity_bonus + face_hint_bonus -
+           blur_penalty - motion_penalty - occ_penalty - far_penalty;
+}
+
+static double overall_capture_priority(const Track::FrameData& frame) {
+    return is_usable_face_frame(frame)
+        ? face_capture_priority(frame)
+        : person_capture_priority(frame) - 260.0;
+}
+
+static bool better_face_capture(const Track::FrameData& candidate,
+                                const Track::FrameData& current) {
+    if (!is_usable_face_frame(candidate)) {
+        return false;
+    }
+    if (!is_usable_face_frame(current)) {
+        return true;
+    }
+
+    float candidate_occ = frame_occlusion(candidate);
+    float current_occ = frame_occlusion(current);
+    double candidate_priority = face_capture_priority(candidate);
+    double current_priority = face_capture_priority(current);
+
+    bool much_clearer = candidate.clarity > current.clarity * 1.15 + 4.0 &&
+                        candidate.blur_severity <= current.blur_severity + 0.08f &&
+                        candidate.motion_ratio <= current.motion_ratio + 0.004f &&
+                        candidate_occ <= current_occ + 0.10f;
+    if (much_clearer) {
+        return true;
+    }
+
+    if (candidate.face_pose_level > current.face_pose_level &&
+        candidate.clarity >= current.clarity * 0.86 &&
+        candidate.blur_severity <= current.blur_severity + 0.10f &&
+        candidate.area_ratio >= current.area_ratio * 0.92f) {
+        return true;
+    }
+
+    if (candidate.strong_candidate != current.strong_candidate) {
+        if (candidate.strong_candidate &&
+            candidate.clarity >= current.clarity * 0.90 &&
+            candidate.blur_severity <= current.blur_severity + 0.08f) {
+            return true;
+        }
+        if (!candidate.strong_candidate &&
+            current.strong_candidate &&
+            current.clarity >= candidate.clarity * 0.90 &&
+            current.blur_severity <= candidate.blur_severity + 0.08f) {
             return false;
-        }
-        if (!current.has_face || current.face_pose_level < 1) {
-            return true;
-        }
-
-        float candidate_occ = occlusion_of(candidate);
-        float current_occ = occlusion_of(current);
-        double candidate_priority = capture_priority(candidate);
-        double current_priority = capture_priority(current);
-
-        bool much_clearer = candidate.clarity > current.clarity * 1.15 + 4.0 &&
-                            candidate.blur_severity <= current.blur_severity + 0.08f &&
-                            candidate.motion_ratio <= current.motion_ratio + 0.004f &&
-                            candidate_occ <= current_occ + 0.10f;
-        if (much_clearer) {
-            return true;
-        }
-
-        if (candidate.face_pose_level > current.face_pose_level &&
-            candidate.clarity >= current.clarity * 0.86 &&
-            candidate.blur_severity <= current.blur_severity + 0.10f) {
-            return true;
-        }
-
-        if (candidate.strong_candidate != current.strong_candidate) {
-            if (candidate.strong_candidate &&
-                candidate.clarity >= current.clarity * 0.90 &&
-                candidate.blur_severity <= current.blur_severity + 0.08f) {
-                return true;
-            }
-            if (!candidate.strong_candidate &&
-                current.strong_candidate &&
-                current.clarity >= candidate.clarity * 0.90 &&
-                current.blur_severity <= candidate.blur_severity + 0.08f) {
-                return false;
-            }
-        }
-
-        if (candidate_priority > current_priority + 18.0) {
-            return true;
-        }
-        if (candidate_priority < current_priority - 18.0) {
-            return false;
-        }
-
-        if (candidate.clarity > current.clarity * 1.05 &&
-            candidate.blur_severity <= current.blur_severity + 0.05f &&
-            candidate.motion_ratio <= current.motion_ratio + 0.003f) {
-            return true;
-        }
-
-        if (candidate.blur_severity + 0.04f < current.blur_severity &&
-            candidate.clarity >= current.clarity * 0.96) {
-            return true;
-        }
-
-        if (candidate.motion_ratio + 0.0025f < current.motion_ratio &&
-            candidate.clarity >= current.clarity * 0.97) {
-            return true;
-        }
-
-        if (candidate_occ + 0.03f < current_occ &&
-            candidate.clarity >= current.clarity * 0.97) {
-            return true;
-        }
-
-        if (candidate.yaw_abs + 0.03f < current.yaw_abs &&
-            candidate.clarity >= current.clarity * 0.98 &&
-            candidate.blur_severity <= current.blur_severity + 0.03f) {
-            return true;
-        }
-
-        return candidate.score > current.score &&
-               candidate.clarity >= current.clarity * 0.98;
-    };
-
-    for (size_t i = 0; i < frames.size(); ++i) {
-        const auto& frame = frames[i];
-        if (!frame.has_face || frame.face_pose_level < 1) {
-            continue;
-        }
-
-        if (best_index == SIZE_MAX || better_for_capture(frame, frames[best_index])) {
-            best_index = i;
         }
     }
 
+    if (candidate_priority > current_priority + 18.0) {
+        return true;
+    }
+    if (candidate_priority < current_priority - 18.0) {
+        return false;
+    }
+
+    if (candidate_occ + 0.02f < current_occ &&
+        candidate.clarity >= current.clarity * 0.96f &&
+        candidate.area_ratio >= current.area_ratio * 0.92f) {
+        return true;
+    }
+
+    if (candidate.area_ratio > current.area_ratio * 1.08f &&
+        candidate.blur_severity <= current.blur_severity + 0.06f &&
+        candidate_occ <= current_occ + 0.08f) {
+        return true;
+    }
+
+    if (candidate.blur_severity + 0.04f < current.blur_severity &&
+        candidate.clarity >= current.clarity * 0.96f) {
+        return true;
+    }
+
+    if (candidate.motion_ratio + 0.0025f < current.motion_ratio &&
+        candidate.clarity >= current.clarity * 0.97f) {
+        return true;
+    }
+
+    if (candidate.yaw_abs + 0.03f < current.yaw_abs &&
+        candidate.clarity >= current.clarity * 0.98f &&
+        candidate.blur_severity <= current.blur_severity + 0.03f) {
+        return true;
+    }
+
+    return candidate.score > current.score &&
+           candidate.clarity >= current.clarity * 0.98;
+}
+
+static bool better_person_capture(const Track::FrameData& candidate,
+                                  const Track::FrameData& current) {
+    if (candidate.person_roi.empty()) {
+        return false;
+    }
+    if (current.person_roi.empty()) {
+        return true;
+    }
+
+    double candidate_priority = person_capture_priority(candidate);
+    double current_priority = person_capture_priority(current);
+
+    if (candidate.area_ratio > current.area_ratio * 1.12f &&
+        candidate.person_occlusion <= current.person_occlusion + 0.10f &&
+        candidate.blur_severity <= current.blur_severity + 0.08f) {
+        return true;
+    }
+
+    if (candidate.person_occlusion + 0.08f < current.person_occlusion &&
+        candidate.area_ratio >= current.area_ratio * 0.94f &&
+        candidate.clarity >= current.clarity * 0.92f) {
+        return true;
+    }
+
+    if (candidate_priority > current_priority + 16.0) {
+        return true;
+    }
+    if (candidate_priority < current_priority - 16.0) {
+        return false;
+    }
+
+    if (candidate.clarity > current.clarity * 1.08f + 3.0 &&
+        candidate.blur_severity <= current.blur_severity + 0.06f) {
+        return true;
+    }
+
+    return candidate.score > current.score &&
+           candidate.area_ratio >= current.area_ratio * 0.96f;
+}
+
+static size_t select_best_face_frame_index(const std::vector<Track::FrameData>& frames) {
+    size_t best_index = SIZE_MAX;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (!is_usable_face_frame(frames[i])) {
+            continue;
+        }
+        if (best_index == SIZE_MAX || better_face_capture(frames[i], frames[best_index])) {
+            best_index = i;
+        }
+    }
+    return best_index;
+}
+
+static size_t select_best_person_frame_index(const std::vector<Track::FrameData>& frames) {
+    size_t best_index = SIZE_MAX;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (frames[i].person_roi.empty()) {
+            continue;
+        }
+        if (best_index == SIZE_MAX || better_person_capture(frames[i], frames[best_index])) {
+            best_index = i;
+        }
+    }
     return best_index;
 }
 
@@ -509,7 +617,7 @@ static int update_pending_track(const Detection& det, const cv::Mat& det_hist) {
             reused_id = reuse_recent_capture_id(det, det_hist);
         }
         int assigned_id = (reused_id > 0) ? reused_id : next_id++;
-        bool already_captured = is_track_already_captured(assigned_id);
+        bool already_captured = is_track_fully_captured(assigned_id);
 
         tracks.push_back(create_track(det, assigned_id, already_captured));
         pending_tracks.erase(pending_tracks.begin() + best_idx);
@@ -526,11 +634,11 @@ static std::vector<std::pair<int,int>> hungarian_algorithm(const std::vector<std
     
     std::vector<std::pair<int,int>> assignments;
     
-    // 简化的匈牙利算法实现
+    // 绠€鍖栫殑鍖堢墮鍒╃畻娉曞疄鐜?
     std::vector<bool> row_assigned(n, false);
     std::vector<bool> col_assigned(m, false);
     
-    // 首先进行贪婪匹配，但确保全局最优
+    // 棣栧厛杩涜璐┆鍖归厤锛屼絾纭繚鍏ㄥ眬鏈€浼?
     for(int iter = 0; iter < std::min(n, m); iter++) {
         float min_cost = 1e6;
         int best_i = -1, best_j = -1;
@@ -559,34 +667,34 @@ static std::vector<std::pair<int,int>> hungarian_algorithm(const std::vector<std
     return assignments;
 }
 
-//-----------------Track EKF操作-----------------
+//-----------------Track EKF鎿嶄綔-----------------
 
 static void predict_track(Track& t) {
-    // 改进的8状态运动模型: [x, y, w, h, vx, vy, vw, vh]
-    _float_t dt = 1.0f;  // 时间步长
+    // 鏀硅繘鐨?鐘舵€佽繍鍔ㄦā鍨? [x, y, w, h, vx, vy, vw, vh]
+    _float_t dt = 1.0f;  // 鏃堕棿姝ラ暱
     _float_t F[EKF_N*EKF_N] = {
         1,0,0,0,dt, 0, 0, 0,  // x = x + vx*dt
         0,1,0,0, 0,dt, 0, 0,  // y = y + vy*dt  
         0,0,1,0, 0, 0,dt, 0,  // w = w + vw*dt
         0,0,0,1, 0, 0, 0,dt,  // h = h + vh*dt
-        0,0,0,0, 1, 0, 0, 0,  // vx = vx (常速度模型)
+        0,0,0,0, 1, 0, 0, 0,  // vx = vx (甯搁€熷害妯″瀷)
         0,0,0,0, 0, 1, 0, 0,  // vy = vy
         0,0,0,0, 0, 0, 1, 0,  // vw = vw  
         0,0,0,0, 0, 0, 0, 1   // vh = vh
     };
     
-    // 改进的过程噪声矩阵 - 根据运动不确定性调整
+    // 鏀硅繘鐨勮繃绋嬪櫔澹扮煩闃?- 鏍规嵁杩愬姩涓嶇‘瀹氭€ц皟鏁?
     _float_t Q[EKF_N*EKF_N] = {0};
-    // 位置噪声
-    Q[0*EKF_N+0] = 1.0f;   // x位置噪声
-    Q[1*EKF_N+1] = 1.0f;   // y位置噪声
-    Q[2*EKF_N+2] = 0.5f;   // width噪声(较小)
-    Q[3*EKF_N+3] = 0.5f;   // height噪声(较小)
-    // 速度噪声
-    Q[4*EKF_N+4] = 0.1f;   // x速度噪声
-    Q[5*EKF_N+5] = 0.1f;   // y速度噪声  
-    Q[6*EKF_N+6] = 0.05f;  // width变化速度噪声
-    Q[7*EKF_N+7] = 0.05f;  // height变化速度噪声
+    // 浣嶇疆鍣０
+    Q[0*EKF_N+0] = 1.0f;   // x浣嶇疆鍣０
+    Q[1*EKF_N+1] = 1.0f;   // y浣嶇疆鍣０
+    Q[2*EKF_N+2] = 0.5f;   // width鍣０(杈冨皬)
+    Q[3*EKF_N+3] = 0.5f;   // height鍣０(杈冨皬)
+    // 閫熷害鍣０
+    Q[4*EKF_N+4] = 0.1f;   // x閫熷害鍣０
+    Q[5*EKF_N+5] = 0.1f;   // y閫熷害鍣０  
+    Q[6*EKF_N+6] = 0.05f;  // width鍙樺寲閫熷害鍣０
+    Q[7*EKF_N+7] = 0.05f;  // height鍙樺寲閫熷害鍣０
     
     ekf_predict(&t.ekf, t.ekf.x, F, Q);
 
@@ -594,14 +702,14 @@ static void predict_track(Track& t) {
                                    t.ekf.x[1],
                                    std::max(10.0f, t.ekf.x[2]),
                                    std::max(10.0f, t.ekf.x[3])));
-    t.bbox.width  = std::max(10.0f, t.ekf.x[2]);   // 防止宽度过小
-    t.bbox.height = std::max(10.0f, t.ekf.x[3]);   // 防止高度过小
+    t.bbox.width  = std::max(10.0f, t.ekf.x[2]);   // 闃叉瀹藉害杩囧皬
+    t.bbox.height = std::max(10.0f, t.ekf.x[3]);   // 闃叉楂樺害杩囧皬
 
-    // 边界检查，防止bbox超出图像边界（现在使用720p坐标系）
+    // 杈圭晫妫€鏌ワ紝闃叉bbox瓒呭嚭鍥惧儚杈圭晫锛堢幇鍦ㄤ娇鐢?20p鍧愭爣绯伙級
     t.bbox.x = std::max(0.0f, std::min((float)(IMAGE_WIDTH - t.bbox.width), t.bbox.x));
     t.bbox.y = std::max(0.0f, std::min((float)(IMAGE_HEIGHT - t.bbox.height), t.bbox.y));
     
-    // 确保bbox在图像范围内
+    // 纭繚bbox鍦ㄥ浘鍍忚寖鍥村唴
     if (t.bbox.x + t.bbox.width > IMAGE_WIDTH) {
         t.bbox.width = IMAGE_WIDTH - t.bbox.x;
     }
@@ -629,24 +737,24 @@ static void correct_track(Track& t, const Detection& det) {
     t.smoothed_bbox = t.bbox;
     t.last_det_bbox = t.bbox;
     t.hist = calc_hist(det.roi);
-    t.prop = det.prop;  // 更新置信度
+    t.prop = det.prop;  // 鏇存柊缃俊搴?
     t.missed = 0;
     t.hits++;
     t.active = true;
     
-    // 经过3次成功匹配后确认track
+    // 缁忚繃3娆℃垚鍔熷尮閰嶅悗纭track
     if (t.hits >= 3) {
         t.confirmed = true;
     }
 
-    // 记录检测框面积历史
+    // 璁板綍妫€娴嬫闈㈢Н鍘嗗彶
     float area = t.bbox.width * t.bbox.height;
     t.bbox_history.push_back(area);
-    // 只保留最近20帧
+    // 鍙繚鐣欐渶杩?0甯?
     if (t.bbox_history.size() > 20) t.bbox_history.erase(t.bbox_history.begin());
 }
 
-//-----------------新建Track-----------------
+//-----------------鏂板缓Track-----------------
 
 static void predict_track_robust(Track& t) {
     _float_t dt = 1.0f;
@@ -747,7 +855,7 @@ static Track create_track(const Detection& det, int id, bool already_captured) {
     Track t;
     t.id = id;
 
-    _float_t Pdiag[EKF_N] = {1,1,1,1,10,10,10,10};  // 位置方差较小，速度方差较大
+    _float_t Pdiag[EKF_N] = {1,1,1,1,10,10,10,10};  // 浣嶇疆鏂瑰樊杈冨皬锛岄€熷害鏂瑰樊杈冨ぇ
     ekf_initialize(&t.ekf, Pdiag);
 
     _float_t state[EKF_N] = {det.x1, det.y1, det.x2-det.x1, det.y2-det.y1, 0, 0, 0, 0};
@@ -760,9 +868,9 @@ static Track create_track(const Detection& det, int id, bool already_captured) {
     t.prop = det.prop;
     t.age = 1;
     t.missed = 0;
-    t.hits = 1;  // 初始命中次数
+    t.hits = 1;  // 鍒濆鍛戒腑娆℃暟
     t.active = true;
-    t.confirmed = false;  // 需要几帧确认
+    t.confirmed = false;  // 闇€瑕佸嚑甯х‘璁?
     append_area_history(t.bbox_history, t.bbox.area());
     t.bbox_jitter = 0.0f;
     t.is_approaching = false;
@@ -772,13 +880,16 @@ static Track create_track(const Detection& det, int id, bool already_captured) {
     return t;
 }
 
-//-----------------主更新函数-----------------
+//-----------------涓绘洿鏂板嚱鏁?----------------
 
 std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     struct PendingUpload {
         int trackId;
-        Track::FrameData bestFrame;
-        float occlusion;
+        bool uploadPerson{false};
+        bool uploadFace{false};
+        Track::FrameData personFrame;
+        Track::FrameData faceFrame;
+        float faceOcclusion{0.0f};
     };
 
     std::vector<PendingUpload> pendingUploads;
@@ -792,40 +903,90 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     auto queue_upload_if_needed = [&](const Track& t) {
         if (!upload_callback || t.frame_candidates.empty() || !captured_person_ids || !captured_face_ids) {
             log_debug("Track %d upload conditions not met", t.id);
-            if (is_track_already_captured(t.id)) {
+            if (has_track_uploaded_asset(t.id)) {
                 remember_recent_capture(t);
             }
             return;
         }
 
-        if (is_track_already_captured(t.id)) {
+        if (is_track_fully_captured(t.id)) {
             remember_recent_capture(t);
             log_debug("Track %d already captured, refresh recent cache only", t.id);
             return;
         }
 
-        size_t best_index = select_best_frame_index(t.frame_candidates);
-        if (best_index == SIZE_MAX) {
-            log_debug("Track %d skipped upload: no frontal-quality candidate", t.id);
+        size_t best_face_index = select_best_face_frame_index(t.frame_candidates);
+        size_t best_person_index = select_best_person_frame_index(t.frame_candidates);
+        if (best_face_index == SIZE_MAX && best_person_index == SIZE_MAX) {
+            log_debug("Track %d skipped upload: no usable candidate", t.id);
             return;
         }
 
-        const auto& best_frame = t.frame_candidates[best_index];
-        float occ = best_frame.person_occlusion * 0.7f + best_frame.face_edge_occlusion * 0.3f;
-        pendingUploads.push_back({t.id, best_frame, occ});
-        captured_person_ids->insert(t.id);
-        captured_face_ids->insert(t.id);
+        const float person_area_threshold =
+            std::max(g_capture_min_area_ratio * 1.10f, g_capture_near_area_ratio * 0.82f);
+        const float face_area_threshold =
+            std::max(g_capture_min_area_ratio * 1.22f, g_capture_near_area_ratio * 0.88f);
+
+        PendingUpload pending;
+        pending.trackId = t.id;
+
+        if (!is_track_face_captured(t.id) && best_face_index != SIZE_MAX) {
+            const auto& best_face_frame = t.frame_candidates[best_face_index];
+            if (best_face_frame.area_ratio >= face_area_threshold) {
+                pending.uploadFace = true;
+                pending.faceFrame = best_face_frame;
+                pending.faceOcclusion = frame_occlusion(best_face_frame);
+            }
+        }
+
+        if (!is_track_person_captured(t.id)) {
+            if (pending.uploadFace) {
+                pending.uploadPerson = true;
+                pending.personFrame = pending.faceFrame;
+            } else if (best_person_index != SIZE_MAX) {
+                const auto& best_person_frame = t.frame_candidates[best_person_index];
+                bool area_ok = best_person_frame.area_ratio >= person_area_threshold;
+                bool occlusion_ok = best_person_frame.person_occlusion <=
+                    std::max(g_capture_max_person_occlusion * 1.10f, 0.62f);
+                if (area_ok && occlusion_ok) {
+                    pending.uploadPerson = true;
+                    pending.personFrame = best_person_frame;
+                }
+            }
+        }
+
+        if (!pending.uploadPerson && !pending.uploadFace) {
+            float best_area_ratio = 0.0f;
+            if (best_face_index != SIZE_MAX) {
+                best_area_ratio = std::max(best_area_ratio, t.frame_candidates[best_face_index].area_ratio);
+            }
+            if (best_person_index != SIZE_MAX) {
+                best_area_ratio = std::max(best_area_ratio, t.frame_candidates[best_person_index].area_ratio);
+            }
+            log_debug("Track %d skipped upload: target still too far or too occluded (best_area=%.4f)",
+                      t.id,
+                      best_area_ratio);
+            return;
+        }
+
+        pendingUploads.push_back(std::move(pending));
+        if (pendingUploads.back().uploadPerson) {
+            captured_person_ids->insert(t.id);
+        }
+        if (pendingUploads.back().uploadFace) {
+            captured_face_ids->insert(t.id);
+        }
         remember_recent_capture(t);
     };
 
-    // 预测所有track
+    // 棰勬祴鎵€鏈塼rack
     for (auto& t : tracks) predict_track_robust(t);
 
     int N = tracks.size();
     int M = dets.size();
     
     if (N == 0) {
-        // 没有现有track时也不立即建轨，先进入pending确认
+        // 娌℃湁鐜版湁track鏃朵篃涓嶇珛鍗冲缓杞紝鍏堣繘鍏ending纭
         std::vector<cv::Mat> det_hists(M);
         for (int j = 0; j < M; j++) {
             det_hists[j] = calc_hist(dets[j].roi);
@@ -853,21 +1014,28 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         snapshot = tracks;
         lock.unlock();
         for (const auto& upload : pendingUploads) {
-            upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
-            upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
-            log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 模糊度: %.2f, 综合评分: %.2f)",
+            if (upload.uploadPerson && !upload.personFrame.person_roi.empty()) {
+                upload_callback(upload.personFrame.person_roi, upload.trackId, "person");
+            }
+            if (upload.uploadFace && !upload.faceFrame.face_roi.empty()) {
+                upload_callback(upload.faceFrame.face_roi, upload.trackId, "face");
+            }
+            const auto& log_frame = upload.uploadFace ? upload.faceFrame : upload.personFrame;
+            log_info("Track %d upload queued: person=%d face=%d clarity=%.2f area=%.2f%% occ=%.2f motion=%.4f blur=%.2f score=%.2f",
                      upload.trackId,
-                     upload.bestFrame.clarity,
-                     upload.bestFrame.area_ratio * 100,
-                     upload.occlusion,
-                     upload.bestFrame.motion_ratio,
-                     upload.bestFrame.blur_severity,
-                     upload.bestFrame.score);
+                     upload.uploadPerson ? 1 : 0,
+                     upload.uploadFace ? 1 : 0,
+                     log_frame.clarity,
+                     log_frame.area_ratio * 100.0f,
+                     upload.uploadFace ? upload.faceOcclusion : log_frame.person_occlusion,
+                     log_frame.motion_ratio,
+                     log_frame.blur_severity,
+                     log_frame.score);
         }
         return snapshot;
     }
 
-    // 计算代价矩阵
+    // 璁＄畻浠ｄ环鐭╅樀
     std::vector<std::vector<float>> cost(N, std::vector<float>(M, 1.0f));
 
     std::vector<cv::Mat> det_hists(M);
@@ -880,25 +1048,25 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             cv::Rect2f det_rect(dets[j].x1, dets[j].y1, 
                                dets[j].x2-dets[j].x1, dets[j].y2-dets[j].y1);
             
-            // IoU相似度 (0-1, 越大越好)
+            // IoU鐩镐技搴?(0-1, 瓒婂ぇ瓒婂ソ)
             cv::Rect2f stable_bbox = stable_track_bbox(tracks[i]);
             float iou_score = std::max(iou(tracks[i].bbox, det_rect), iou(stable_bbox, det_rect));
             
-            // 颜色直方图距离 (0-1, 越小越好) 
+            // 棰滆壊鐩存柟鍥捐窛绂?(0-1, 瓒婂皬瓒婂ソ) 
             float hist_score = hist_distance(tracks[i].hist, det_hists[j]);
 
-            // 中心点距离归一化（低帧率下比IoU更稳）
+            // 涓績鐐硅窛绂诲綊涓€鍖栵紙浣庡抚鐜囦笅姣擨oU鏇寸ǔ锛?
             float center_dist = std::min(center_distance_norm(tracks[i].bbox, det_rect),
                                          center_distance_norm(stable_bbox, det_rect));
             
-            // 置信度权重
+            // 缃俊搴︽潈閲?
             float conf_weight = std::min(1.0f, dets[j].prop / 0.8f);
             
-            // 尺寸一致性检查
+            // 灏哄涓€鑷存€ф鏌?
             float area_ratio = std::min(stable_bbox.area(), det_rect.area()) /
                               std::max(stable_bbox.area(), det_rect.area());
             
-            // 综合代价：IoU权重0.5, 直方图权重0.25, 中心距离权重0.2, 置信度权重0.05
+            // 缁煎悎浠ｄ环锛欼oU鏉冮噸0.5, 鐩存柟鍥炬潈閲?.25, 涓績璺濈鏉冮噸0.2, 缃俊搴︽潈閲?.05
             float center_cost = std::min(1.0f, center_dist / 0.28f);
             float area_penalty = 0.0f;
             if (area_ratio < 0.55f) {
@@ -914,7 +1082,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                         (1.0f - conf_weight) * 0.05f +
                         area_penalty;
             
-            // 如果尺寸差异过大，增加代价
+            // 濡傛灉灏哄宸紓杩囧ぇ锛屽鍔犱唬浠?
             if (iou_score < 0.02f && center_dist > 0.24f) {
                 cost[i][j] += 0.30f;
             }
@@ -929,13 +1097,13 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         }
     }
 
-    // 使用匈牙利算法进行最优匹配
+    // 浣跨敤鍖堢墮鍒╃畻娉曡繘琛屾渶浼樺尮閰?
     std::vector<std::pair<int,int>> assignments = hungarian_algorithm(cost, 0.74f);
     
     std::vector<bool> track_assigned(N, false);
     std::vector<bool> det_assigned(M, false);
 
-    // 应用匹配结果
+    // 搴旂敤鍖归厤缁撴灉
     for (const auto& assignment : assignments) {
         int track_idx = assignment.first;
         int det_idx = assignment.second;
@@ -945,7 +1113,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         correct_track_robust(tracks[track_idx], dets[det_idx]);
     }
 
-    // 创建新tracks
+    // 鍒涘缓鏂皌racks
     for (int j=0; j<M; j++) {
         if(!det_assigned[j]){
             if (should_suppress_new_track(dets[j])) {
@@ -959,7 +1127,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         }
     }
     
-    // 删除长期丢失的tracks，但在删除前先处理上传
+    // 鍒犻櫎闀挎湡涓㈠け鐨則racks锛屼絾鍦ㄥ垹闄ゅ墠鍏堝鐞嗕笂浼?
     auto it = std::remove_if(tracks.begin(), tracks.end(),
                 [&](const Track& t){
                     if(t.missed > MAX_MISSED){
@@ -973,18 +1141,24 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     snapshot = tracks;
     lock.unlock();
     for (const auto& upload : pendingUploads) {
-        upload_callback(upload.bestFrame.person_roi, upload.trackId, "person");
-        upload_callback(upload.bestFrame.face_roi, upload.trackId, "face");
-        log_info("Track %d 上传最佳帧 (清晰度: %.2f, 面积占比: %.2f%%, 遮挡: %.2f, 运动: %.4f, 模糊度: %.2f, 综合评分: %.2f)",
+        if (upload.uploadPerson && !upload.personFrame.person_roi.empty()) {
+            upload_callback(upload.personFrame.person_roi, upload.trackId, "person");
+        }
+        if (upload.uploadFace && !upload.faceFrame.face_roi.empty()) {
+            upload_callback(upload.faceFrame.face_roi, upload.trackId, "face");
+        }
+        const auto& log_frame = upload.uploadFace ? upload.faceFrame : upload.personFrame;
+        log_info("Track %d upload queued: person=%d face=%d clarity=%.2f area=%.2f%% occ=%.2f motion=%.4f blur=%.2f score=%.2f",
                  upload.trackId,
-                 upload.bestFrame.clarity,
-                 upload.bestFrame.area_ratio * 100,
-                 upload.occlusion,
-                 upload.bestFrame.motion_ratio,
-                 upload.bestFrame.blur_severity,
-                 upload.bestFrame.score);
+                 upload.uploadPerson ? 1 : 0,
+                 upload.uploadFace ? 1 : 0,
+                 log_frame.clarity,
+                 log_frame.area_ratio * 100.0f,
+                 upload.uploadFace ? upload.faceOcclusion : log_frame.person_occlusion,
+                 log_frame.motion_ratio,
+                 log_frame.blur_severity,
+                 log_frame.score);
     }
-
     return snapshot;
 }
 
@@ -992,7 +1166,7 @@ std::vector<Track> get_expiring_tracks() {
     std::lock_guard<std::mutex> lock(tracks_mutex);
     std::vector<Track> expiring_tracks;
     
-    // 找到即将被删除的tracks
+    // 鎵惧埌鍗冲皢琚垹闄ょ殑tracks
     for (const auto& t : tracks) {
         if (t.missed > MAX_MISSED) {
             expiring_tracks.push_back(t);
@@ -1006,83 +1180,15 @@ void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
     std::lock_guard<std::mutex> lock(tracks_mutex);
     for (auto& t : tracks) {
         if (t.id == track_id) {
-            auto occlusion_of = [](const Track::FrameData& frame) {
-                return frame.person_occlusion * 0.7f + frame.face_edge_occlusion * 0.3f;
-            };
-            auto capture_priority = [&](const Track::FrameData& frame) {
-                float occ = occlusion_of(frame);
-                float pose_bonus = frame.face_pose_level >= 2 ? 140.0f : 70.0f;
-                float strong_bonus = frame.strong_candidate ? 90.0f : 0.0f;
-                float clarity_bonus = static_cast<float>(frame.clarity * 0.42);
-                float blur_penalty = frame.blur_severity * 85.0f;
-                float motion_penalty = frame.motion_ratio * 22000.0f;
-                float occlusion_penalty = occ * 90.0f;
-                float yaw_penalty = frame.yaw_abs * 65.0f;
-                return frame.score + pose_bonus + strong_bonus + clarity_bonus -
-                       blur_penalty - motion_penalty - occlusion_penalty - yaw_penalty;
-            };
-            auto better_for_capture = [&](const Track::FrameData& candidate, const Track::FrameData& current) {
-                if (!candidate.has_face || candidate.face_pose_level < 1) {
-                    return false;
-                }
-                if (!current.has_face || current.face_pose_level < 1) {
-                    return true;
-                }
-
-                float candidate_occ = occlusion_of(candidate);
-                float current_occ = occlusion_of(current);
-                double candidate_priority = capture_priority(candidate);
-                double current_priority = capture_priority(current);
-
-                if (candidate.clarity > current.clarity * 1.15 + 4.0 &&
-                    candidate.blur_severity <= current.blur_severity + 0.08f &&
-                    candidate.motion_ratio <= current.motion_ratio + 0.004f &&
-                    candidate_occ <= current_occ + 0.10f) {
-                    return true;
-                }
-
-                if (candidate.face_pose_level > current.face_pose_level &&
-                    candidate.clarity >= current.clarity * 0.86 &&
-                    candidate.blur_severity <= current.blur_severity + 0.10f) {
-                    return true;
-                }
-
-                if (candidate.strong_candidate != current.strong_candidate) {
-                    if (candidate.strong_candidate &&
-                        candidate.clarity >= current.clarity * 0.90 &&
-                        candidate.blur_severity <= current.blur_severity + 0.08f) {
-                        return true;
-                    }
-                    if (!candidate.strong_candidate &&
-                        current.strong_candidate &&
-                        current.clarity >= candidate.clarity * 0.90 &&
-                        current.blur_severity <= candidate.blur_severity + 0.08f) {
-                        return false;
-                    }
-                }
-
-                if (candidate_priority > current_priority + 18.0) {
-                    return true;
-                }
-                if (candidate_priority < current_priority - 18.0) {
-                    return false;
-                }
-
-                if (candidate.clarity > current.clarity * 1.05 &&
-                    candidate.blur_severity <= current.blur_severity + 0.05f &&
-                    candidate.motion_ratio <= current.motion_ratio + 0.003f) {
-                    return true;
-                }
-
-                return candidate.score > current.score &&
-                       candidate.clarity >= current.clarity * 0.98;
-            };
-
             if (t.frame_candidates.size() < g_max_frame_candidates) {
                 t.frame_candidates.push_back(frame_data);
                 t.best_clarity = std::max(t.best_clarity, frame_data.clarity);
-                log_debug("Track %d 添加候选帧 (评分: %.2f, 候选帧总数: %zu)", 
-                         track_id, frame_data.score, t.frame_candidates.size());
+                log_debug("Track %d candidate stored: score=%.2f count=%zu face=%d area=%.4f",
+                          track_id,
+                          frame_data.score,
+                          t.frame_candidates.size(),
+                          is_usable_face_frame(frame_data) ? 1 : 0,
+                          frame_data.area_ratio);
             } else {
                 auto peak_clarity_it = std::max_element(t.frame_candidates.begin(), t.frame_candidates.end(),
                     [](const Track::FrameData& a, const Track::FrameData& b) {
@@ -1098,7 +1204,7 @@ void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
                         continue;
                     }
                     if (replace_it == t.frame_candidates.end() ||
-                        capture_priority(*it) < capture_priority(*replace_it)) {
+                        overall_capture_priority(*it) < overall_capture_priority(*replace_it)) {
                         replace_it = it;
                     }
                 }
@@ -1106,12 +1212,24 @@ void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {
                 if (replace_it == t.frame_candidates.end()) {
                     replace_it = peak_clarity_it;
                 }
-                
-                if (better_for_capture(frame_data, *replace_it) ||
-                    capture_priority(frame_data) > capture_priority(*replace_it) + 8.0) {
+
+                bool replace = false;
+                if (is_usable_face_frame(frame_data) || is_usable_face_frame(*replace_it)) {
+                    replace = better_face_capture(frame_data, *replace_it) ||
+                              overall_capture_priority(frame_data) > overall_capture_priority(*replace_it) + 8.0;
+                } else {
+                    replace = better_person_capture(frame_data, *replace_it) ||
+                              person_capture_priority(frame_data) > person_capture_priority(*replace_it) + 10.0;
+                }
+
+                if (replace) {
                     *replace_it = frame_data;
                     t.best_clarity = std::max(t.best_clarity, frame_data.clarity);
-                    log_debug("Track %d 替换低分帧 (新分数: %.2f)", track_id, frame_data.score);
+                    log_debug("Track %d candidate replaced: score=%.2f face=%d area=%.4f",
+                              track_id,
+                              frame_data.score,
+                              is_usable_face_frame(frame_data) ? 1 : 0,
+                              frame_data.area_ratio);
                 }
             }
             break;

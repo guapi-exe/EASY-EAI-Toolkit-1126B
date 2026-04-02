@@ -65,6 +65,9 @@ void set_upload_callback(std::function<void(const cv::Mat&, int, const std::stri
                          std::unordered_set<int>* person_ids,
                          std::unordered_set<int>* face_ids);
 void set_max_frame_candidates(size_t maxFrameCandidates);
+void set_capture_sort_preferences(float minAreaRatio,
+                                  float nearAreaRatio,
+                                  float maxPersonOcclusion);
 void add_frame_candidate(int track_id, const Track::FrameData& frame_data);
 
 #endif

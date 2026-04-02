@@ -30,6 +30,62 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
             double sceneBrightness = environmentBrightness.load();
             AdaptiveCaptureThresholds adaptiveThresholds =
                 buildAdaptiveCaptureThresholds(config, sceneBrightness);
+            bool accepted_face_candidate = false;
+            bool accepted_person_only_candidate = false;
+            auto maybe_add_person_only_candidate = [&](const char* reason) {
+                if (accepted_face_candidate || accepted_person_only_candidate || job.personRoi.empty()) {
+                    return;
+                }
+
+                double person_clarity = computeFocusMeasure(job.personRoi);
+                float person_blur_severity = computeMotionBlurSeverity(job.personRoi);
+                float near_area_threshold =
+                    std::max(config.minAreaRatio * 1.12f, config.nearAreaRatio * 0.82f);
+                bool near_enough = job.areaRatio >= near_area_threshold;
+                bool occlusion_ok =
+                    job.personOcclusion <= std::max(config.maxPersonOcclusion * 1.10f, 0.62f);
+                bool motion_ok = job.motionRatio <= adaptiveThresholds.maxMotionRejectRatio;
+                bool blur_ok =
+                    person_blur_severity <=
+                    std::min(0.92f, adaptiveThresholds.fallbackMaxBlurSeverity + 0.10f);
+                bool clarity_ok =
+                    person_clarity >=
+                    std::max(24.0, adaptiveThresholds.fallbackMinClarity * 0.42);
+                if (!near_enough || !occlusion_ok || !motion_ok || !blur_ok || !clarity_ok) {
+                    return;
+                }
+
+                Track::FrameData frame_data;
+                frame_data.score = person_clarity * 0.32 +
+                                   job.areaRatio * 3400.0f -
+                                   job.personOcclusion * 170.0f -
+                                   job.motionRatio * 21000.0f -
+                                   person_blur_severity * 95.0f;
+                frame_data.person_roi = job.personRoi.clone();
+                frame_data.face_roi.release();
+                frame_data.has_face = false;
+                frame_data.is_frontal = false;
+                frame_data.face_pose_level = 0;
+                frame_data.strong_candidate = false;
+                frame_data.yaw_abs = 1.5f;
+                frame_data.clarity = person_clarity;
+                frame_data.area_ratio = job.areaRatio;
+                frame_data.person_occlusion = job.personOcclusion;
+                frame_data.face_edge_occlusion = 0.0f;
+                frame_data.motion_ratio = job.motionRatio;
+                frame_data.blur_severity = person_blur_severity;
+                add_frame_candidate(job.trackId, frame_data);
+                clearTrackReject("eval", job.trackId);
+                accepted_person_only_candidate = true;
+                log_debug("Track %d person-only fallback accepted: reason=%s clarity=%.1f area=%.4f occ=%.2f motion=%.4f blur=%.2f",
+                          job.trackId,
+                          reason,
+                          person_clarity,
+                          job.areaRatio,
+                          job.personOcclusion,
+                          job.motionRatio,
+                          person_blur_severity);
+            };
             Mat person_roi_resized;
             int target_width = min(config.faceInputMaxWidth, job.personRoi.cols);
             int target_height = static_cast<int>(job.personRoi.rows * target_width / (float)job.personRoi.cols);
@@ -296,6 +352,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     frame_data.blur_severity = current_blur_severity;
                                                     add_frame_candidate(job.trackId, frame_data);
                                                     clearTrackReject("eval", job.trackId);
+                                                    accepted_face_candidate = true;
 
                                                     if (multi_frame_fused) {
                                                         log_debug("Track %d fused candidate accepted: frames=%d sim=%.2f clarity=%.1f blur=%.2f yaw=%.2f edge=%.2f",
@@ -398,6 +455,10 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                        detail);
                     }
                 }
+            }
+
+            if (!accepted_face_candidate) {
+                maybe_add_person_only_candidate("face_unavailable");
             }
         }
 

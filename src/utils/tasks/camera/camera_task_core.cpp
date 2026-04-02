@@ -72,6 +72,9 @@ void CameraTask::setRuntimeConfig(const DeviceConfig& config) {
     brightnessBlackThreshold.store(config.captureDefaults.brightnessBlackThreshold);
     set_max_frame_candidates(
         static_cast<size_t>(std::max(1, config.captureDefaults.maxFrameCandidates)));
+    set_capture_sort_preferences(config.captureDefaults.minAreaRatio,
+                                 config.captureDefaults.nearAreaRatio,
+                                 config.captureDefaults.maxPersonOcclusion);
 }
 
 DeviceConfig::CaptureDefaults CameraTask::getCaptureConfigSnapshot() const {
