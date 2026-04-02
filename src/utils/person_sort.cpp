@@ -44,17 +44,17 @@ struct RecentCapture {
 static std::vector<LostTrack> lost_tracks;
 static std::vector<RecentCapture> recent_captures;
 static std::vector<PendingTrack> pending_tracks;
-static constexpr int LOST_TRACK_TTL = MAX_MISSED + 15;
-static constexpr int RECENT_CAPTURE_TTL = MAX_MISSED + 90;
+static constexpr int LOST_TRACK_TTL = 35;
+static constexpr int RECENT_CAPTURE_TTL = 75;
 static constexpr int PENDING_TRACK_TTL = 4;
 static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
 static constexpr size_t BBOX_HISTORY_LIMIT = 20;
-static constexpr float TRACK_SMOOTH_CENTER_ALPHA = 0.42f;
-static constexpr float TRACK_SMOOTH_SIZE_ALPHA = 0.24f;
-static constexpr float TRACK_RECOVER_CENTER_ALPHA = 0.62f;
-static constexpr float TRACK_RECOVER_SIZE_ALPHA = 0.40f;
-static constexpr float TRACK_NEW_CENTER_ALPHA = 0.72f;
-static constexpr float TRACK_NEW_SIZE_ALPHA = 0.50f;
+static constexpr float TRACK_SMOOTH_CENTER_ALPHA = 0.30f;
+static constexpr float TRACK_SMOOTH_SIZE_ALPHA = 0.16f;
+static constexpr float TRACK_RECOVER_CENTER_ALPHA = 0.48f;
+static constexpr float TRACK_RECOVER_SIZE_ALPHA = 0.30f;
+static constexpr float TRACK_NEW_CENTER_ALPHA = 0.60f;
+static constexpr float TRACK_NEW_SIZE_ALPHA = 0.38f;
 static constexpr float TRACK_BBOX_JITTER_ALPHA = 0.28f;
 static float g_capture_min_area_ratio = CAPTURE_MIN_AREA_RATIO;
 static float g_capture_near_area_ratio = CAPTURE_NEAR_AREA_RATIO;
@@ -299,20 +299,23 @@ static int reuse_lost_track_id(const Detection& det, const cv::Mat& det_hist) {
         float iou_score = iou(lt.bbox, det_rect);
         float hist_score = hist_distance(lt.hist, det_hist);
         float center_dist = center_distance_norm(lt.bbox, det_rect);
-        float center_score = 1.0f - std::min(1.0f, center_dist / 0.25f);
+        float center_score = 1.0f - std::min(1.0f, center_dist / 0.20f);
 
-        if ((iou_score < 0.03f && center_dist > 0.20f) || hist_score > 0.65f || center_score < 0.0f) {
+        if ((iou_score < 0.03f && center_dist > 0.15f) || hist_score > 0.50f || center_score < 0.0f) {
             continue;
         }
 
         float score = iou_score * 0.45f + (1.0f - hist_score) * 0.35f + center_score * 0.20f;
+        // TTL decay: older lost tracks are harder to reuse.
+        float ttl_factor = static_cast<float>(lt.ttl) / static_cast<float>(LOST_TRACK_TTL);
+        score *= std::max(0.3f, ttl_factor);
         if (score > best_score) {
             best_score = score;
             best_idx = i;
         }
     }
 
-    if (best_idx != -1 && best_score >= 0.45f) {
+    if (best_idx != -1 && best_score >= 0.55f) {
         int reused_id = lost_tracks[best_idx].id;
         lost_tracks.erase(lost_tracks.begin() + best_idx);
         log_debug("Reuse lost track id: %d (score=%.3f)", reused_id, best_score);
@@ -342,21 +345,24 @@ static int reuse_recent_capture_id(const Detection& det, const cv::Mat& det_hist
         float center_dist = center_distance_norm(rc.bbox, det_rect);
         float center_score = 1.0f - std::min(1.0f, center_dist / 0.14f);
 
-        if (hist_score > 0.34f) {
+        if (hist_score > 0.28f) {
             continue;
         }
-        if (iou_score < 0.04f && center_dist > 0.10f) {
+        if (iou_score < 0.04f && center_dist > 0.08f) {
             continue;
         }
 
         float score = (1.0f - hist_score) * 0.55f + center_score * 0.30f + iou_score * 0.15f;
+        // TTL decay: older captures are harder to reuse.
+        float ttl_factor = static_cast<float>(rc.ttl) / static_cast<float>(RECENT_CAPTURE_TTL);
+        score *= std::max(0.4f, ttl_factor);
         if (score > best_score) {
             best_score = score;
             best_idx = i;
         }
     }
 
-    if (best_idx != -1 && best_score >= 0.67f) {
+    if (best_idx != -1 && best_score >= 0.75f) {
         int reused_id = recent_captures[best_idx].id;
         recent_captures.erase(recent_captures.begin() + best_idx);
         log_debug("Reuse recent captured id: %d (score=%.3f)", reused_id, best_score);
@@ -565,11 +571,20 @@ static size_t select_best_person_frame_index(const std::vector<Track::FrameData>
 static bool should_suppress_new_track(const Detection& det) {
     cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
 
+    // Check against active tracks.
     for (const auto& t : tracks) {
         cv::Rect2f ref_bbox = stable_track_bbox(t);
         float iou_score = iou(ref_bbox, det_rect);
         float center_dist = center_distance_norm(ref_bbox, det_rect);
-        if (iou_score > 0.45f || center_dist < 0.03f) {
+        if (iou_score > 0.38f || center_dist < 0.05f) {
+            return true;
+        }
+    }
+    // Also check against pending tracks to avoid duplicate pending entries.
+    for (const auto& pt : pending_tracks) {
+        float iou_score = iou(pt.bbox, det_rect);
+        float center_dist = center_distance_norm(pt.bbox, det_rect);
+        if (iou_score > 0.38f || center_dist < 0.05f) {
             return true;
         }
     }
@@ -629,41 +644,55 @@ static int update_pending_track(const Detection& det, const cv::Mat& det_hist) {
 
 
 static std::vector<std::pair<int,int>> hungarian_algorithm(const std::vector<std::vector<float>>& cost_matrix, float max_cost) {
-    int n = cost_matrix.size();
-    int m = cost_matrix[0].size();
-    
-    std::vector<std::pair<int,int>> assignments;
-    
-    // 绠€鍖栫殑鍖堢墮鍒╃畻娉曞疄鐜?
-    std::vector<bool> row_assigned(n, false);
-    std::vector<bool> col_assigned(m, false);
-    
-    // 棣栧厛杩涜璐┆鍖归厤锛屼絾纭繚鍏ㄥ眬鏈€浼?
-    for(int iter = 0; iter < std::min(n, m); iter++) {
-        float min_cost = 1e6;
-        int best_i = -1, best_j = -1;
-        
-        for(int i = 0; i < n; i++) {
-            if(row_assigned[i]) continue;
-            for(int j = 0; j < m; j++) {
-                if(col_assigned[j]) continue;
-                if(cost_matrix[i][j] < min_cost) {
-                    min_cost = cost_matrix[i][j];
-                    best_i = i;
-                    best_j = j;
+    // Kuhn-Munkres (Hungarian) algorithm — O(n^3) globally optimal assignment.
+    // For n<10 (typical 1-5 persons) this runs in <0.1ms on ARM Cortex-A55.
+    int n = static_cast<int>(cost_matrix.size());
+    int m = n > 0 ? static_cast<int>(cost_matrix[0].size()) : 0;
+    if (n == 0 || m == 0) return {};
+
+    int sz = std::max(n, m);
+    std::vector<std::vector<float>> C(sz, std::vector<float>(sz, max_cost));
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < m; j++)
+            C[i][j] = cost_matrix[i][j];
+
+    const float INF = 1e9f;
+    std::vector<float> u(sz + 1, 0.0f), v(sz + 1, 0.0f);
+    std::vector<int> p(sz + 1, 0), way(sz + 1, 0);
+
+    for (int i = 1; i <= sz; i++) {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<float> minv(sz + 1, INF);
+        std::vector<bool> used(sz + 1, false);
+        do {
+            used[j0] = true;
+            int i0 = p[j0], j1 = 0;
+            float delta = INF;
+            for (int j = 1; j <= sz; j++) {
+                if (!used[j]) {
+                    float cur = C[i0 - 1][j - 1] - u[i0] - v[j];
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
                 }
             }
-        }
-        
-        if(best_i != -1 && best_j != -1 && min_cost < max_cost) {
-            assignments.push_back({best_i, best_j});
-            row_assigned[best_i] = true;
-            col_assigned[best_j] = true;
-        } else {
-            break;
+            for (int j = 0; j <= sz; j++) {
+                if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+                else { minv[j] -= delta; }
+            }
+            j0 = j1;
+        } while (p[j0] != 0);
+        do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+    }
+
+    std::vector<std::pair<int,int>> assignments;
+    for (int j = 1; j <= sz; j++) {
+        int i = p[j] - 1;
+        int col = j - 1;
+        if (i >= 0 && i < n && col >= 0 && col < m && cost_matrix[i][col] < max_cost) {
+            assignments.push_back({i, col});
         }
     }
-    
     return assignments;
 }
 
@@ -727,10 +756,10 @@ static void correct_track(Track& t, const Detection& det) {
                                 0,1,0,0,
                                 0,0,1,0,
                                 0,0,0,1};
-    _float_t R[EKF_M*EKF_M] = {0.01,0,0,0,
-                                0,0.01,0,0,
-                                0,0,0.01,0,
-                                0,0,0,0.01};
+    _float_t R[EKF_M*EKF_M] = {16.0,0,0,0,
+                                0,16.0,0,0,
+                                0,0,64.0,0,
+                                0,0,0,64.0};
     ekf_update(&t.ekf, z, z, H, R);
 
     t.bbox = clamp_bbox(cv::Rect2f(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1));
@@ -799,10 +828,10 @@ static void correct_track_robust(Track& t, const Detection& det) {
                                  0,1,0,0,
                                  0,0,1,0,
                                  0,0,0,1};
-    _float_t R[EKF_M * EKF_M] = {0.01,0,0,0,
-                                 0,0.01,0,0,
-                                 0,0,0.01,0,
-                                 0,0,0,0.01};
+    _float_t R[EKF_M * EKF_M] = {16.0,0,0,0,
+                                 0,16.0,0,0,
+                                 0,0,64.0,0,
+                                 0,0,0,64.0};
     ekf_update(&t.ekf, z, z, H, R);
 
     cv::Rect2f ekf_rect = clamp_bbox(cv::Rect2f(t.ekf.x[0],
@@ -956,6 +985,30 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         }
 
         if (!pending.uploadPerson && !pending.uploadFace) {
+            // ── 无脸人体兜底上传 ──
+            // 当没有合格人脸时，仍然上传最佳人体全身图，避免漏抓侧脸/低头/远距离人员。
+            if (!is_track_person_captured(t.id) && best_person_index != SIZE_MAX) {
+                const auto& fallback_person = t.frame_candidates[best_person_index];
+                // 兜底上传使用更宽松的面积和遮挡门槛
+                float fallback_area_threshold =
+                    std::max(g_capture_min_area_ratio * 0.90f, g_capture_near_area_ratio * 0.65f);
+                float fallback_occlusion_max =
+                    std::max(g_capture_max_person_occlusion * 1.25f, 0.68f);
+                bool fallback_area_ok = fallback_person.area_ratio >= fallback_area_threshold;
+                bool fallback_occ_ok = fallback_person.person_occlusion <= fallback_occlusion_max;
+                if (fallback_area_ok && fallback_occ_ok) {
+                    pending.uploadPerson = true;
+                    pending.personFrame = fallback_person;
+                    log_info("Track %d fallback person-only upload: no usable face, area=%.4f occ=%.2f clarity=%.1f",
+                             t.id,
+                             fallback_person.area_ratio,
+                             fallback_person.person_occlusion,
+                             fallback_person.clarity);
+                }
+            }
+        }
+
+        if (!pending.uploadPerson && !pending.uploadFace) {
             float best_area_ratio = 0.0f;
             if (best_face_index != SIZE_MAX) {
                 best_area_ratio = std::max(best_area_ratio, t.frame_candidates[best_face_index].area_ratio);
@@ -1035,7 +1088,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         return snapshot;
     }
 
-    // 璁＄畻浠ｄ环鐭╅樀
+    // Cost matrix construction — position-dominant weights to prevent ID swaps.
     std::vector<std::vector<float>> cost(N, std::vector<float>(M, 1.0f));
 
     std::vector<cv::Mat> det_hists(M);
@@ -1043,30 +1096,39 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         det_hists[j] = calc_hist(dets[j].roi);
     }
 
+    // Pre-compute EKF predicted bbox for each track.
+    std::vector<cv::Rect2f> predicted_bboxes(N);
+    for (int i = 0; i < N; i++) {
+        float px = tracks[i].ekf.x[0] + tracks[i].ekf.x[4];
+        float py = tracks[i].ekf.x[1] + tracks[i].ekf.x[5];
+        float pw = std::max(10.0f, tracks[i].ekf.x[2] + tracks[i].ekf.x[6]);
+        float ph = std::max(10.0f, tracks[i].ekf.x[3] + tracks[i].ekf.x[7]);
+        predicted_bboxes[i] = clamp_bbox(cv::Rect2f(px, py, pw, ph));
+    }
+
     for (int i=0; i<N; i++) {
         for (int j=0; j<M; j++) {
-            cv::Rect2f det_rect(dets[j].x1, dets[j].y1, 
+            cv::Rect2f det_rect(dets[j].x1, dets[j].y1,
                                dets[j].x2-dets[j].x1, dets[j].y2-dets[j].y1);
-            
-            // IoU鐩镐技搴?(0-1, 瓒婂ぇ瓒婂ソ)
+
             cv::Rect2f stable_bbox = stable_track_bbox(tracks[i]);
-            float iou_score = std::max(iou(tracks[i].bbox, det_rect), iou(stable_bbox, det_rect));
-            
-            // 棰滆壊鐩存柟鍥捐窛绂?(0-1, 瓒婂皬瓒婂ソ) 
+            // IoU: take best of raw bbox, smoothed bbox, and EKF predicted bbox.
+            float iou_score = std::max({iou(tracks[i].bbox, det_rect),
+                                        iou(stable_bbox, det_rect),
+                                        iou(predicted_bboxes[i], det_rect)});
+
             float hist_score = hist_distance(tracks[i].hist, det_hists[j]);
 
-            // 涓績鐐硅窛绂诲綊涓€鍖栵紙浣庡抚鐜囦笅姣擨oU鏇寸ǔ锛?
-            float center_dist = std::min(center_distance_norm(tracks[i].bbox, det_rect),
-                                         center_distance_norm(stable_bbox, det_rect));
-            
-            // 缃俊搴︽潈閲?
+            // Center distance: take minimum of all three references.
+            float center_dist = std::min({center_distance_norm(tracks[i].bbox, det_rect),
+                                          center_distance_norm(stable_bbox, det_rect),
+                                          center_distance_norm(predicted_bboxes[i], det_rect)});
+
             float conf_weight = std::min(1.0f, dets[j].prop / 0.8f);
-            
-            // 灏哄涓€鑷存€ф鏌?
+
             float area_ratio = std::min(stable_bbox.area(), det_rect.area()) /
                               std::max(stable_bbox.area(), det_rect.area());
-            
-            // 缁煎悎浠ｄ环锛欼oU鏉冮噸0.5, 鐩存柟鍥炬潈閲?.25, 涓績璺濈鏉冮噸0.2, 缃俊搴︽潈閲?.05
+
             float center_cost = std::min(1.0f, center_dist / 0.28f);
             float area_penalty = 0.0f;
             if (area_ratio < 0.55f) {
@@ -1076,13 +1138,14 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                 area_penalty = severity * max_penalty;
             }
 
-            cost[i][j] = (1.0f - iou_score) * 0.42f +
-                        hist_score * 0.28f +
-                        center_cost * 0.22f +
+            // Weights: position-dominant to prevent ID swaps between similar-looking people.
+            // IoU 0.48 + hist 0.18 + center 0.26 + conf 0.05 = 0.97 + area_penalty
+            cost[i][j] = (1.0f - iou_score) * 0.48f +
+                        hist_score * 0.18f +
+                        center_cost * 0.26f +
                         (1.0f - conf_weight) * 0.05f +
                         area_penalty;
-            
-            // 濡傛灉灏哄宸紓杩囧ぇ锛屽鍔犱唬浠?
+
             if (iou_score < 0.02f && center_dist > 0.24f) {
                 cost[i][j] += 0.30f;
             }
@@ -1094,20 +1157,47 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             if (hist_score > 0.82f) {
                 cost[i][j] += 0.20f;
             }
+
+            // Velocity consistency penalty: if EKF predicts the track should be
+            // far from this detection, penalize the match (prevents ID swaps).
+            if (tracks[i].confirmed) {
+                float pred_dist = center_distance_norm(predicted_bboxes[i], det_rect);
+                if (pred_dist > 0.15f) {
+                    cost[i][j] += 0.15f;
+                }
+            }
         }
     }
 
-    // 浣跨敤鍖堢墮鍒╃畻娉曡繘琛屾渶浼樺尮閰?
-    std::vector<std::pair<int,int>> assignments = hungarian_algorithm(cost, 0.74f);
+    // max_cost tightened to reject weak matches that cause ID swaps.
+    std::vector<std::pair<int,int>> assignments = hungarian_algorithm(cost, 0.65f);
     
     std::vector<bool> track_assigned(N, false);
     std::vector<bool> det_assigned(M, false);
 
-    // 搴旂敤鍖归厤缁撴灉
+    // Apply assignments with post-match validation to prevent ID swaps.
     for (const auto& assignment : assignments) {
         int track_idx = assignment.first;
         int det_idx = assignment.second;
-        
+
+        // Post-match IoU gate: reject matches where the detection is spatially
+        // far from the track, even if the Hungarian algorithm chose it as "optimal".
+        // This prevents cross-assignments between similar-looking people.
+        if (tracks[track_idx].confirmed) {
+            cv::Rect2f det_rect(dets[det_idx].x1, dets[det_idx].y1,
+                               dets[det_idx].x2 - dets[det_idx].x1,
+                               dets[det_idx].y2 - dets[det_idx].y1);
+            cv::Rect2f stable_bbox = stable_track_bbox(tracks[track_idx]);
+            float match_iou = std::max(iou(tracks[track_idx].bbox, det_rect),
+                                       iou(stable_bbox, det_rect));
+            float match_center_dist = std::min(center_distance_norm(tracks[track_idx].bbox, det_rect),
+                                               center_distance_norm(stable_bbox, det_rect));
+            if (match_iou < 0.08f && match_center_dist > 0.20f) {
+                // Reject: this match is spatially implausible for a confirmed track.
+                continue;
+            }
+        }
+
         track_assigned[track_idx] = true;
         det_assigned[det_idx] = true;
         correct_track_robust(tracks[track_idx], dets[det_idx]);
@@ -1174,6 +1264,27 @@ std::vector<Track> get_expiring_tracks() {
     }
     
     return expiring_tracks;
+}
+
+std::vector<Track> sort_predict_only() {
+    std::lock_guard<std::mutex> lock(tracks_mutex);
+    for (auto& t : tracks) {
+        if (t.missed <= MAX_MISSED) {
+            predict_track_robust(t);
+            // Smoothly advance smoothed_bbox toward EKF prediction.
+            float alpha_c = TRACK_SMOOTH_CENTER_ALPHA * 0.5f;
+            float alpha_s = TRACK_SMOOTH_SIZE_ALPHA * 0.5f;
+            if (is_valid_bbox(t.smoothed_bbox)) {
+                t.smoothed_bbox.x += alpha_c * (t.bbox.x - t.smoothed_bbox.x);
+                t.smoothed_bbox.y += alpha_c * (t.bbox.y - t.smoothed_bbox.y);
+                t.smoothed_bbox.width += alpha_s * (t.bbox.width - t.smoothed_bbox.width);
+                t.smoothed_bbox.height += alpha_s * (t.bbox.height - t.smoothed_bbox.height);
+            } else {
+                t.smoothed_bbox = t.bbox;
+            }
+        }
+    }
+    return tracks;
 }
 
 void add_frame_candidate(int track_id, const Track::FrameData& frame_data) {

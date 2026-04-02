@@ -60,6 +60,7 @@ struct Track {
 
 void sort_init();
 std::vector<Track> sort_update(const std::vector<Detection>& dets);
+std::vector<Track> sort_predict_only();
 std::vector<Track> get_expiring_tracks();
 void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
                          std::unordered_set<int>* person_ids,

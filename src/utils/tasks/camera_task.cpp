@@ -51,19 +51,22 @@ struct AdaptiveCaptureThresholds {
 
 constexpr double kLowLightBrightnessThreshold = 92.0;
 constexpr double kLowLightBrightnessFloor = 58.0;
-constexpr float kLowLightMotionRatioScale = 0.72f;
-constexpr float kLowLightMotionRejectRatioScale = 0.60f;
-constexpr float kLowLightMaxBlurSeverityScale = 0.82f;
-constexpr float kLowLightFallbackMaxBlurSeverityScale = 0.74f;
-constexpr float kLowLightMinClarityScale = 1.10f;
-constexpr float kLowLightFallbackMinClarityScale = 1.18f;
-constexpr size_t kMultiFrameFusionHistorySize = 3;
-constexpr float kMultiFrameFusionLowLightMinStrength = 0.18f;
-constexpr float kMultiFrameFusionMaxShiftRatio = 0.20f;
-constexpr float kMultiFrameFusionMinSimilarity = 0.36f;
-constexpr int kApproachPositiveFramesRequired = 2;
-constexpr int kApproachNegativeFramesRequired = 3;
-constexpr float kApproachJitterFreezeThreshold = 0.16f;
+// 暗光自适应：放宽阈值而非收紧。暗光下所有帧质量普遍下降，
+// 应"矮子里拔高个"，否则几乎所有候选帧都会被拒绝。
+constexpr float kLowLightMotionRatioScale = 1.30f;       // 放宽运动阈值（原 0.72 收紧→现放宽）
+constexpr float kLowLightMotionRejectRatioScale = 1.20f;  // 放宽运动硬拒阈值（原 0.60→现放宽）
+constexpr float kLowLightMaxBlurSeverityScale = 1.25f;    // 放宽模糊容忍（原 0.82 收紧→现放宽）
+constexpr float kLowLightFallbackMaxBlurSeverityScale = 1.15f; // 放宽兜底模糊容忍（原 0.74→现放宽）
+constexpr float kLowLightMinClarityScale = 0.70f;         // 降低清晰度要求（原 1.10 提高→现降低）
+constexpr float kLowLightFallbackMinClarityScale = 0.60f; // 降低兜底清晰度要求（原 1.18→现降低）
+// 多帧融合：放宽条件以提高暗光场景融合成功率
+constexpr size_t kMultiFrameFusionHistorySize = 5;          // 积累更多历史帧（原 3）
+constexpr float kMultiFrameFusionLowLightMinStrength = 0.10f; // 更早启用融合（原 0.18）
+constexpr float kMultiFrameFusionMaxShiftRatio = 0.25f;     // 允许更大帧间位移（原 0.20）
+constexpr float kMultiFrameFusionMinSimilarity = 0.28f;     // 放宽相似度门槛（原 0.36）
+constexpr int kApproachPositiveFramesRequired = 3;
+constexpr int kApproachNegativeFramesRequired = 4;
+constexpr float kApproachJitterFreezeThreshold = 0.11f;
 constexpr float kApproachJitterRejectThreshold = 0.30f;
 
 struct MultiFrameFusionResult {
@@ -319,7 +322,7 @@ float computeTrackAreaTrendRatio(const Track& track) {
         return 0.0f;
     }
 
-    size_t span = std::min<size_t>(4, track.bbox_history.size() - 1);
+    size_t span = std::min<size_t>(8, track.bbox_history.size() - 1);
     float area_now = track.bbox_history.back();
     float area_prev = track.bbox_history[track.bbox_history.size() - 1 - span];
     return (area_now - area_prev) / (area_prev + 1e-6f);
@@ -1684,7 +1687,25 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         dets.reserve(detect_result_group.count);
         for (int i = 0; i < detect_result_group.count; i++) {
             detect_result_t& d = detect_result_group.results[i];
-            if (d.prop < 0.7f) continue;
+
+            // Confidence hysteresis: lower threshold for detections near existing tracks.
+            float confThreshold = 0.7f;
+            if (d.prop >= 0.5f && d.prop < 0.7f && !cachedTracks.empty()) {
+                cv::Rect det_rect(max(0, d.box.left), max(0, d.box.top),
+                                  min(IMAGE_WIDTH - 1, d.box.right) - max(0, d.box.left),
+                                  min(IMAGE_HEIGHT - 1, d.box.bottom) - max(0, d.box.top));
+                for (const auto& tr : cachedTracks) {
+                    if (tr.confirmed) {
+                        cv::Rect tr_rect((int)tr.smoothed_bbox.x, (int)tr.smoothed_bbox.y,
+                                         (int)tr.smoothed_bbox.width, (int)tr.smoothed_bbox.height);
+                        if (rect_iou(det_rect, tr_rect) > 0.3f) {
+                            confThreshold = 0.5f;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (d.prop < confThreshold) continue;
 
             Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
                           min(IMAGE_WIDTH - 1, d.box.right) - max(0, d.box.left),
@@ -1701,8 +1722,11 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             dets.push_back(det);
         }
 
-        nmsDetections(dets, 0.55f);
+        nmsDetections(dets, 0.45f);
         cachedTracks = sort_update(dets);
+    } else {
+        // Non-detection frame: advance EKF predictions to avoid sawtooth jitter.
+        cachedTracks = sort_predict_only();
     }
 
     vector<Track> tracks = cachedTracks;
@@ -1830,20 +1854,6 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         float current_area_4k = bbox_4k.width * bbox_4k.height;
         float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
 
-        float area_trend_ratio = 0.0f;
-        if (t.bbox_history.size() >= 5) {
-            float area_now = t.bbox_history.back();
-            float area_prev = t.bbox_history[t.bbox_history.size() - 5];
-            area_trend_ratio = (area_now - area_prev) / (area_prev + 1e-6f);
-
-            // 先更新接近状态，再用于后续抓拍门控
-            if (area_trend_ratio > config.approachRatioPos) {
-                t.is_approaching = true;
-            } else if (area_trend_ratio < config.approachRatioNeg) {
-                t.is_approaching = false;
-            }
-        }
-
         bool near_ok = area_ratio >= config.nearAreaRatio;
         bool approach_ok = t.is_approaching || near_ok || !config.requireApproach;
         auto& approachState = trackApproachStates[t.id];
@@ -1852,7 +1862,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         bool history_advanced = t.bbox_history.size() != approachState.lastHistorySize;
         bool jitter_freeze = bbox_jitter >= kApproachJitterFreezeThreshold && !near_ok;
 
-        area_trend_ratio = computeTrackAreaTrendRatio(t);
+        float area_trend_ratio = computeTrackAreaTrendRatio(t);
         if (trend_ready && history_advanced && !jitter_freeze) {
             if (area_trend_ratio > config.approachRatioPos) {
                 approachState.positiveHits = std::min(approachState.positiveHits + 1,
