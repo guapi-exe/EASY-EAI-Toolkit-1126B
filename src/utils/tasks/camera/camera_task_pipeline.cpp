@@ -246,8 +246,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
                            area_trend_ratio < config.approachRatioNeg &&
                            approachState.negativeHits >= 2 &&
                            !near_ok;
-        if (t.has_captured) {
-            logTrackReject("gate", t.id, "already_captured", "track already captured");
+        bool person_captured = capturedPersonIds.find(t.id) != capturedPersonIds.end();
+        bool face_captured = capturedFaceIds.find(t.id) != capturedFaceIds.end();
+        if (person_captured && face_captured) {
+            logTrackReject("gate", t.id, "already_captured", "person and face already captured");
             continue;
         }
         if (bbox_jitter > kApproachJitterRejectThreshold && !near_ok) {

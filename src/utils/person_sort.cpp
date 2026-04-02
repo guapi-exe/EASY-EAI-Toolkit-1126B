@@ -900,7 +900,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     age_recent_captures();
     age_pending_tracks();
 
-    auto queue_upload_if_needed = [&](const Track& t) {
+    auto queue_upload_if_needed = [&](const Track& t, bool allow_person_only) {
         if (!upload_callback || t.frame_candidates.empty() || !captured_person_ids || !captured_face_ids) {
             log_debug("Track %d upload conditions not met", t.id);
             if (has_track_uploaded_asset(t.id)) {
@@ -955,6 +955,13 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             }
         }
 
+        if (!allow_person_only && !pending.uploadFace) {
+            if (!is_track_person_captured(t.id) && best_person_index != SIZE_MAX) {
+                log_debug("Track %d defer person-only upload until track leaves scene", t.id);
+            }
+            return;
+        }
+
         if (!pending.uploadPerson && !pending.uploadFace) {
             float best_area_ratio = 0.0f;
             if (best_face_index != SIZE_MAX) {
@@ -1005,7 +1012,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                     [&](const Track& t){
                         if(t.missed > MAX_MISSED){
                             cache_lost_track(t);
-                            queue_upload_if_needed(t);
+                            queue_upload_if_needed(t, true);
                             return true;
                         }
                         return false;
@@ -1114,6 +1121,14 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     }
 
     // 鍒涘缓鏂皌racks
+    for (int i = 0; i < N; ++i) {
+        const auto& t = tracks[i];
+        if (!track_assigned[i] || t.frame_candidates.empty() || is_track_fully_captured(t.id)) {
+            continue;
+        }
+        queue_upload_if_needed(t, false);
+    }
+
     for (int j=0; j<M; j++) {
         if(!det_assigned[j]){
             if (should_suppress_new_track(dets[j])) {
@@ -1132,7 +1147,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
                 [&](const Track& t){
                     if(t.missed > MAX_MISSED){
                         cache_lost_track(t);
-                        queue_upload_if_needed(t);
+                        queue_upload_if_needed(t, true);
                         return true;
                     }
                     return false;
