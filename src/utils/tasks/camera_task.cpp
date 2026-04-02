@@ -57,10 +57,22 @@ constexpr float kLowLightMaxBlurSeverityScale = 0.82f;
 constexpr float kLowLightFallbackMaxBlurSeverityScale = 0.74f;
 constexpr float kLowLightMinClarityScale = 1.10f;
 constexpr float kLowLightFallbackMinClarityScale = 1.18f;
+constexpr size_t kMultiFrameFusionHistorySize = 3;
+constexpr float kMultiFrameFusionLowLightMinStrength = 0.18f;
+constexpr float kMultiFrameFusionMaxShiftRatio = 0.20f;
+constexpr float kMultiFrameFusionMinSimilarity = 0.36f;
 constexpr int kApproachPositiveFramesRequired = 2;
 constexpr int kApproachNegativeFramesRequired = 3;
 constexpr float kApproachJitterFreezeThreshold = 0.16f;
 constexpr float kApproachJitterRejectThreshold = 0.30f;
+
+struct MultiFrameFusionResult {
+    cv::Mat fused;
+    int acceptedFrames{0};
+    float meanSimilarity{0.0f};
+    double referenceFocus{0.0};
+    double bestAlignedFocus{0.0};
+};
 
 float clampUnit(float value) {
     return std::max(0.0f, std::min(1.0f, value));
@@ -312,6 +324,179 @@ float computeTrackAreaTrendRatio(const Track& track) {
     float area_prev = track.bbox_history[track.bbox_history.size() - 1 - span];
     return (area_now - area_prev) / (area_prev + 1e-6f);
 }
+
+cv::Rect clampRectToSize(const cv::Rect& rect, const cv::Size& bounds) {
+    int x = std::max(0, std::min(rect.x, bounds.width - 1));
+    int y = std::max(0, std::min(rect.y, bounds.height - 1));
+    int width = std::max(1, std::min(rect.width, bounds.width - x));
+    int height = std::max(1, std::min(rect.height, bounds.height - y));
+    return cv::Rect(x, y, width, height);
+}
+
+cv::Rect expandRectFromCenter(const cv::Rect& rect, float scale, const cv::Size& bounds) {
+    float cx = rect.x + rect.width * 0.5f;
+    float cy = rect.y + rect.height * 0.5f;
+    float width = rect.width * scale;
+    float height = rect.height * scale;
+    cv::Rect expanded(static_cast<int>(std::round(cx - width * 0.5f)),
+                      static_cast<int>(std::round(cy - height * 0.5f)),
+                      static_cast<int>(std::round(width)),
+                      static_cast<int>(std::round(height)));
+    return clampRectToSize(expanded, bounds);
+}
+
+double computeGrayFocusVariance(const cv::Mat& gray) {
+    if (gray.empty() || gray.cols <= 1 || gray.rows <= 1) {
+        return 0.0;
+    }
+
+    cv::Mat lap;
+    cv::Laplacian(gray, lap, CV_32F);
+    cv::Scalar mean_val, stddev_val;
+    cv::meanStdDev(lap, mean_val, stddev_val);
+    return stddev_val[0] * stddev_val[0];
+}
+
+MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
+                                                 const std::vector<cv::Mat>& history,
+                                                 const cv::Rect& focus_box,
+                                                 float low_light_strength,
+                                                 float motion_ratio) {
+    MultiFrameFusionResult result;
+    if (reference.empty() || history.empty() || focus_box.width < 16 || focus_box.height < 16) {
+        return result;
+    }
+
+    cv::Rect safe_focus = expandRectFromCenter(focus_box, 1.45f, reference.size());
+    cv::Mat reference_gray;
+    cv::cvtColor(reference, reference_gray, cv::COLOR_BGR2GRAY);
+    result.referenceFocus = computeGrayFocusVariance(reference_gray(safe_focus));
+    result.bestAlignedFocus = result.referenceFocus;
+
+    cv::Mat reference_focus_f;
+    reference_gray(safe_focus).convertTo(reference_focus_f, CV_32F);
+    cv::GaussianBlur(reference_focus_f, reference_focus_f, cv::Size(0, 0), 0.8);
+
+    float blur_sigma = 1.10f + low_light_strength * 0.90f;
+    cv::Mat reference_base;
+    cv::GaussianBlur(reference, reference_base, cv::Size(0, 0), blur_sigma);
+
+    cv::Mat accum;
+    reference_base.convertTo(accum, CV_32FC3);
+    accum *= 1.28f;
+    cv::Mat weight_sum(reference.size(), CV_32F, cv::Scalar(1.28f));
+
+    cv::Mat sharpest = reference.clone();
+    float similarity_sum = 0.0f;
+    int similarity_count = 0;
+
+    size_t history_begin = history.size() > kMultiFrameFusionHistorySize ?
+        history.size() - kMultiFrameFusionHistorySize : 0;
+    for (size_t i = history_begin; i < history.size(); ++i) {
+        if (history[i].empty()) {
+            continue;
+        }
+
+        cv::Mat candidate = history[i];
+        if (candidate.size() != reference.size()) {
+            cv::resize(candidate, candidate, reference.size(), 0, 0, cv::INTER_LINEAR);
+        }
+
+        cv::Mat candidate_gray;
+        cv::cvtColor(candidate, candidate_gray, cv::COLOR_BGR2GRAY);
+        cv::Mat candidate_focus_f;
+        candidate_gray(safe_focus).convertTo(candidate_focus_f, CV_32F);
+        cv::GaussianBlur(candidate_focus_f, candidate_focus_f, cv::Size(0, 0), 0.8);
+
+        cv::Point2d shift = cv::phaseCorrelate(reference_focus_f, candidate_focus_f);
+        float shift_norm = std::sqrt(static_cast<float>(shift.x * shift.x + shift.y * shift.y));
+        float max_shift = std::max(4.0f, std::min(safe_focus.width, safe_focus.height) * kMultiFrameFusionMaxShiftRatio);
+        if (shift_norm > max_shift) {
+            continue;
+        }
+
+        cv::Mat transform = (cv::Mat_<double>(2, 3) << 1.0, 0.0, shift.x,
+                                                       0.0, 1.0, shift.y);
+        cv::Mat aligned;
+        cv::warpAffine(candidate, aligned, transform, reference.size(),
+                       cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+
+        cv::Mat aligned_gray;
+        cv::cvtColor(aligned, aligned_gray, cv::COLOR_BGR2GRAY);
+        cv::Mat diff;
+        cv::absdiff(aligned_gray, reference_gray, diff);
+        cv::Mat diff_f;
+        diff.convertTo(diff_f, CV_32F);
+        cv::Mat similarity = 1.0f - (diff_f - 14.0f) / 62.0f;
+        cv::max(similarity, 0.0f, similarity);
+        cv::min(similarity, 1.0f, similarity);
+        cv::GaussianBlur(similarity, similarity, cv::Size(0, 0), 1.2);
+
+        float mean_similarity = static_cast<float>(cv::mean(similarity(safe_focus))[0]);
+        if (mean_similarity < kMultiFrameFusionMinSimilarity) {
+            continue;
+        }
+
+        cv::Mat aligned_base;
+        cv::GaussianBlur(aligned, aligned_base, cv::Size(0, 0), blur_sigma);
+        cv::Mat aligned_base_f;
+        aligned_base.convertTo(aligned_base_f, CV_32FC3);
+
+        float frame_weight_scale = 0.40f + low_light_strength * 0.18f;
+        if (motion_ratio > 0.010f) {
+            frame_weight_scale *= 0.92f;
+        }
+        cv::Mat frame_weight = similarity * frame_weight_scale;
+        std::vector<cv::Mat> weight_channels(3, frame_weight);
+        cv::Mat frame_weight3;
+        cv::merge(weight_channels, frame_weight3);
+        accum += aligned_base_f.mul(frame_weight3);
+        weight_sum += frame_weight;
+
+        double aligned_focus = computeGrayFocusVariance(aligned_gray(safe_focus));
+        if (aligned_focus > result.bestAlignedFocus * 1.02) {
+            sharpest = aligned;
+            result.bestAlignedFocus = aligned_focus;
+        }
+
+        similarity_sum += mean_similarity;
+        similarity_count++;
+        result.acceptedFrames++;
+    }
+
+    if (result.acceptedFrames <= 0) {
+        result.acceptedFrames = 1;
+        result.meanSimilarity = 0.0f;
+        return result;
+    }
+
+    result.meanSimilarity = similarity_count > 0 ? (similarity_sum / similarity_count) : 0.0f;
+
+    cv::Mat safe_weight = weight_sum + 1e-4f;
+    std::vector<cv::Mat> safe_weight_channels(3, safe_weight);
+    cv::Mat safe_weight3;
+    cv::merge(safe_weight_channels, safe_weight3);
+    cv::Mat fused_base = accum / safe_weight3;
+
+    cv::Mat sharpest_base;
+    cv::GaussianBlur(sharpest, sharpest_base, cv::Size(0, 0), blur_sigma);
+    cv::Mat sharpest_f;
+    sharpest.convertTo(sharpest_f, CV_32FC3);
+    cv::Mat sharpest_base_f;
+    sharpest_base.convertTo(sharpest_base_f, CV_32FC3);
+    cv::Mat detail = sharpest_f - sharpest_base_f;
+
+    cv::Mat reference_f;
+    reference.convertTo(reference_f, CV_32FC3);
+    float detail_gain = 0.78f + low_light_strength * 0.14f;
+    float reference_mix = 0.16f + std::max(0.0f, motion_ratio - 0.006f) * 10.0f;
+    reference_mix = std::max(0.16f, std::min(0.34f, reference_mix));
+
+    cv::Mat fused_f = fused_base + detail * detail_gain;
+    fused_f = fused_f * (1.0f - reference_mix) + reference_f * reference_mix;
+    fused_f.convertTo(result.fused, CV_8UC3);
+    return result;
+}
 } // namespace
 
 static float rect_iou(const cv::Rect& a, const cv::Rect& b) {
@@ -424,6 +609,7 @@ void CameraTask::stop() {
     }
 
     if (worker.joinable()) worker.join();
+    trackPersonRoiHistory.clear();
     log_info("CameraTask: stopped");
 }
 
@@ -847,8 +1033,53 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                             (roll < 24.0f && yaw < 0.32f && best_face.score >= 0.58f && face_edge_occlusion < 0.40f);
                                         bool weak_frontal_ok = frontal_relaxed_ok ||
                                             (roll < 32.0f && yaw < 0.48f && best_face.score >= config.minFaceScore && face_edge_occlusion < 0.72f);
-                                        double current_clarity = computeFocusMeasure(job.personRoi(base_fbox));
-                                        float current_blur_severity = computeMotionBlurSeverity(job.personRoi(base_fbox));
+                                        double reference_clarity = computeFocusMeasure(job.personRoi(base_fbox));
+                                        float reference_blur_severity = computeMotionBlurSeverity(job.personRoi(base_fbox));
+                                        double current_clarity = reference_clarity;
+                                        float current_blur_severity = reference_blur_severity;
+                                        cv::Mat fused_person_roi;
+                                        const cv::Mat* capture_person_roi = &job.personRoi;
+                                        bool multi_frame_fused = false;
+                                        int fusion_frame_count = 0;
+                                        float fusion_mean_similarity = 0.0f;
+                                        bool fusion_enabled =
+                                            adaptiveThresholds.lowLightStrength >= kMultiFrameFusionLowLightMinStrength &&
+                                            !job.fusionHistory.empty() &&
+                                            job.motionRatio <= adaptiveThresholds.maxMotionRejectRatio;
+                                        if (fusion_enabled) {
+                                            MultiFrameFusionResult fusion_result = fuseTrackHistoryPersonRoi(job.personRoi,
+                                                                                                             job.fusionHistory,
+                                                                                                             base_fbox,
+                                                                                                             adaptiveThresholds.lowLightStrength,
+                                                                                                             job.motionRatio);
+                                            if (!fusion_result.fused.empty() && fusion_result.acceptedFrames >= 2) {
+                                                double fused_clarity = computeFocusMeasure(fusion_result.fused(base_fbox));
+                                                float fused_blur_severity = computeMotionBlurSeverity(fusion_result.fused(base_fbox));
+                                                bool fusion_better =
+                                                    fused_clarity > reference_clarity * 1.06 + 3.0 ||
+                                                    (fused_clarity >= reference_clarity * 0.99 &&
+                                                     fused_blur_severity + 0.06f < reference_blur_severity) ||
+                                                    (fused_blur_severity + 0.10f < reference_blur_severity &&
+                                                     fused_clarity >= reference_clarity * 0.95);
+                                                if (fusion_better) {
+                                                    fused_person_roi = std::move(fusion_result.fused);
+                                                    capture_person_roi = &fused_person_roi;
+                                                    current_clarity = fused_clarity;
+                                                    current_blur_severity = fused_blur_severity;
+                                                    multi_frame_fused = true;
+                                                    fusion_frame_count = fusion_result.acceptedFrames;
+                                                    fusion_mean_similarity = fusion_result.meanSimilarity;
+                                                    log_debug("Track %d multi-frame fusion used: frames=%d sim=%.2f clarity=%.1f->%.1f blur=%.2f->%.2f",
+                                                              job.trackId,
+                                                              fusion_result.acceptedFrames,
+                                                              fusion_result.meanSimilarity,
+                                                              reference_clarity,
+                                                              fused_clarity,
+                                                              reference_blur_severity,
+                                                              fused_blur_severity);
+                                                }
+                                            }
+                                        }
                                         bool motion_gate_ok = job.motionRatio < adaptiveThresholds.maxMotionRatio;
                                         bool strong_candidate_ok =
                                             (!config.requireFrontalFace || frontal_relaxed_ok) &&
@@ -889,7 +1120,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     config.headshotMinFaceMargin :
                                                     config.fallbackHeadshotMinFaceMargin;
                                                 if (crop_min_margin >= required_crop_margin) {
-                                                    Mat face_aligned = job.personRoi(fbox).clone();
+                                                    Mat face_aligned = (*capture_person_roi)(fbox).clone();
                                                     int upper_body_w = std::min(job.personRoi.cols,
                                                         std::max(static_cast<int>(base_fbox.width * config.upperBodyWidthFaceRatio),
                                                                  static_cast<int>(job.personRoi.cols * config.upperBodyMinWidthRatio)));
@@ -906,7 +1137,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                         upper_body_y,
                                                         std::min(upper_body_w, job.personRoi.cols - upper_body_x),
                                                         std::min(upper_body_h, job.personRoi.rows - upper_body_y));
-                                                    cv::Mat person_aligned = job.personRoi(upper_body_box).clone();
+                                                    cv::Mat person_aligned = (*capture_person_roi)(upper_body_box).clone();
                                                     float quality_weight, area_weight;
                                                     if (yaw < 0.15f) {
                                                         quality_weight = 0.8f;
@@ -976,12 +1207,31 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     add_frame_candidate(job.trackId, frame_data);
                                                     clearTrackReject("eval", job.trackId);
 
+                                                    if (multi_frame_fused) {
+                                                        log_debug("Track %d fused candidate accepted: frames=%d sim=%.2f clarity=%.1f blur=%.2f yaw=%.2f edge=%.2f",
+                                                                  job.trackId,
+                                                                  fusion_frame_count,
+                                                                  fusion_mean_similarity,
+                                                                  current_clarity,
+                                                                  current_blur_severity,
+                                                                  yaw,
+                                                                  face_edge_occlusion);
+                                                    } else if (!strong_candidate_ok) {
+                                                        log_debug("Track %d fallback candidate accepted: clarity=%.1f blur=%.2f yaw=%.2f edge=%.2f",
+                                                                  job.trackId,
+                                                                  current_clarity,
+                                                                  current_blur_severity,
+                                                                  yaw,
+                                                                  face_edge_occlusion);
+#if 0
                                                     if (!strong_candidate_ok) {
                                                         log_debug("Track %d 添加兜底候选帧: clarity=%.1f yaw=%.2f occ=%.2f",
                                                                   job.trackId,
                                                                   current_clarity,
                                                                   yaw,
                                                                   face_edge_occlusion);
+                                                    }
+#endif
                                                     }
                                                 } else {
                                                     char detail[224];
@@ -1145,6 +1395,7 @@ void CameraTask::run() {
     log_info("CameraTask: face model loaded successfully in %ld seconds", elapsed.count());
     sort_init();
     lastTrackCenters.clear();
+    trackPersonRoiHistory.clear();
     trackApproachStates.clear();
     reportedPersonIds.clear();
     candidateRoundRobinOffset = 0;
@@ -1548,6 +1799,34 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
                  std::max(1, expanded_right - expanded_x),
                  std::max(1, expanded_bottom - expanded_y));
 
+        Mat person_roi = frame(bbox_4k);
+        if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
+            char detail[192];
+            std::snprintf(detail, sizeof(detail), "roi=%dx%d bbox4k=%dx%d",
+                          person_roi.cols,
+                          person_roi.rows,
+                          bbox_4k.width,
+                          bbox_4k.height);
+            logTrackReject("gate", t.id, "person_roi_invalid", detail);
+            continue;
+        }
+
+        std::vector<cv::Mat> fusion_history;
+        auto history_it = trackPersonRoiHistory.find(t.id);
+        if (history_it != trackPersonRoiHistory.end()) {
+            fusion_history.reserve(history_it->second.size());
+            for (const auto& hist_roi : history_it->second) {
+                if (!hist_roi.empty()) {
+                    fusion_history.push_back(hist_roi.clone());
+                }
+            }
+        }
+        auto& roi_history = trackPersonRoiHistory[t.id];
+        roi_history.push_back(person_roi.clone());
+        while (roi_history.size() > kMultiFrameFusionHistorySize) {
+            roi_history.pop_front();
+        }
+
         float current_area_4k = bbox_4k.width * bbox_4k.height;
         float area_ratio = current_area_4k / (CAMERA_WIDTH * CAMERA_HEIGHT);
 
@@ -1681,21 +1960,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             person_occlusion = occ_it->second;
         }
 
-        Mat person_roi = frame(bbox_4k);
-
-        if (person_roi.empty() || person_roi.cols <= 0 || person_roi.rows <= 0) {
-            char detail[192];
-            std::snprintf(detail, sizeof(detail), "roi=%dx%d bbox4k=%dx%d",
-                          person_roi.cols,
-                          person_roi.rows,
-                          bbox_4k.width,
-                          bbox_4k.height);
-            logTrackReject("gate", t.id, "person_roi_invalid", detail);
-            continue;
-        }
         CandidateEvalJob job;
         job.trackId = t.id;
         job.personRoi = person_roi.clone();
+        job.fusionHistory = std::move(fusion_history);
         job.areaRatio = area_ratio;
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;
@@ -1719,6 +1987,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     for (auto it = trackApproachStates.begin(); it != trackApproachStates.end(); ) {
         if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
             it = trackApproachStates.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = trackPersonRoiHistory.begin(); it != trackPersonRoiHistory.end(); ) {
+        if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
+            it = trackPersonRoiHistory.erase(it);
         } else {
             ++it;
         }

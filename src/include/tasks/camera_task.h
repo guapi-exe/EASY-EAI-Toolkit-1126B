@@ -15,6 +15,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#include <vector>
 
 class CameraTask {
 public:
@@ -45,6 +46,7 @@ private:
     struct CandidateEvalJob {
         int trackId;
         cv::Mat personRoi;
+        std::vector<cv::Mat> fusionHistory;
         float areaRatio;
         float personOcclusion;
         float motionRatio;
@@ -118,6 +120,7 @@ private:
     unsigned char* resized_buffer_720p{nullptr};
 
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
+    std::unordered_map<int, std::deque<cv::Mat>> trackPersonRoiHistory;
     std::unordered_map<int, TrackApproachState> trackApproachStates;
     size_t candidateRoundRobinOffset{0};
 
