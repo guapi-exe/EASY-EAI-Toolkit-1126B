@@ -37,6 +37,8 @@ public:
     double getBrightnessBlackThreshold() const { return brightnessBlackThreshold.load(); }
     void captureSnapshot();
     double getEnvironmentBrightness() const { return environmentBrightness.load(); }
+    float getSensorExposureRatio() const { return sensorExposureRatio.load(); }
+    float getSensorGainRatio() const { return sensorGainRatio.load(); }
 
     long getTotalFrames() const { return totalFrames; }
     double getCurrentFPS() const { return currentFPS; }
@@ -126,6 +128,8 @@ private:
 
     std::unordered_set<int> reportedPersonIds;
     std::atomic<double> environmentBrightness{0.0};
+    std::atomic<float> sensorExposureRatio{0.0f};  // exposure / max_exposure (0.0~1.0)
+    std::atomic<float> sensorGainRatio{0.0f};      // (gain - min_gain) / (max_gain - min_gain) (0.0~1.0)
     std::atomic<double> brightnessBlackThreshold{CAMERA_BRIGHTNESS_BLACK_THRESHOLD};
     mutable std::mutex configMutex;
     DeviceConfig::CaptureDefaults captureConfig;

@@ -49,8 +49,6 @@ struct AdaptiveCaptureThresholds {
     float fallbackMaxBlurSeverity{CAPTURE_FALLBACK_MAX_BLUR_SEVERITY};
 };
 
-constexpr double kLowLightBrightnessThreshold = 92.0;
-constexpr double kLowLightBrightnessFloor = 58.0;
 // 暗光自适应：放宽阈值而非收紧。暗光下所有帧质量普遍下降，
 // 应"矮子里拔高个"，否则几乎所有候选帧都会被拒绝。
 constexpr float kLowLightMotionRatioScale = 1.30f;       // 放宽运动阈值（原 0.72 收紧→现放宽）
@@ -90,7 +88,8 @@ double lerpDouble(double a, double b, float t) {
 }
 
 AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::CaptureDefaults& config,
-                                                         double sceneBrightness) {
+                                                         float sensorExpRatio,
+                                                         float sensorGainRatio) {
     AdaptiveCaptureThresholds thresholds;
     thresholds.minClarity = config.minClarity;
     thresholds.fallbackMinClarity = config.fallbackMinClarity;
@@ -99,20 +98,24 @@ AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::Cap
     thresholds.maxBlurSeverity = config.maxBlurSeverity;
     thresholds.fallbackMaxBlurSeverity = config.fallbackMaxBlurSeverity;
 
-    if (sceneBrightness <= 1.0) {
-        return thresholds;
+    // ── Low-light strength: purely from V4L2 sensor AE parameters ──
+    // rkaiq_3A_server auto-adjusts exposure/gain to keep output brightness stable,
+    // so image pixel brightness is unreliable for low-light detection.
+    // Sensor AE parameters are ground truth:
+    //   sensorExpRatio  = exposure / max_exposure  (0.0 ~ 1.0)
+    //   sensorGainRatio = (gain - min) / (max - min) (0.0 ~ 1.0)
+    //
+    // High exposure ratio → long shutter → motion blur inevitable.
+    // High gain ratio → noise amplification.
+
+    float ae_strength = 0.0f;
+    if (sensorExpRatio > 0.01f || sensorGainRatio > 0.01f) {
+        float exp_strength = clampUnit((sensorExpRatio - 0.30f) / 0.50f);  // 30%~80% → 0~1
+        float gain_strength = clampUnit((sensorGainRatio - 0.02f) / 0.13f); // 2%~15% → 0~1
+        ae_strength = std::max(exp_strength, gain_strength);
     }
 
-    double low_light_start = std::max(kLowLightBrightnessThreshold,
-                                      kLowLightBrightnessFloor + 1.0);
-    double low_light_floor = std::min(kLowLightBrightnessFloor,
-                                      low_light_start - 1.0);
-    double range = std::max(8.0, low_light_start - low_light_floor);
-
-    float low_light_strength = 0.0f;
-    if (sceneBrightness < low_light_start) {
-        low_light_strength = clampUnit(static_cast<float>((low_light_start - sceneBrightness) / range));
-    }
+    float low_light_strength = ae_strength;
 
     thresholds.lowLightStrength = low_light_strength;
     thresholds.minClarity = lerpDouble(config.minClarity,
@@ -140,23 +143,6 @@ AdaptiveCaptureThresholds buildAdaptiveCaptureThresholds(const DeviceConfig::Cap
     return thresholds;
 }
 
-double updateFilteredBrightness(double prev, double raw) {
-    if (prev < 0.0) {
-        return raw;
-    }
-
-    double diff = std::fabs(raw - prev);
-    double alpha = 0.20;
-    if (diff >= 40.0) {
-        alpha = 0.75;
-    } else if (diff >= 20.0) {
-        alpha = 0.55;
-    } else if (diff >= 8.0) {
-        alpha = 0.35;
-    }
-
-    return prev * (1.0 - alpha) + raw * alpha;
-}
 
 const char* irCutModeToString(IrCutMode mode) {
     switch (mode) {
@@ -230,29 +216,77 @@ void switchIrCutBlack() {
     log_info("CameraTask: IR-CUT switched to BLACK mode");
 }
 
-double computeSceneBrightnessFast(const cv::Mat& frame) {
-    if (frame.empty()) {
-        return 0.0;
+// ─── V4L2 sensor AE parameter reader ──────────────────────────────────
+// Reads real exposure time and analogue gain from the sensor via V4L2 ioctl.
+// rkaiq_3A_server auto-adjusts these; reading them gives ground truth for
+// low-light detection instead of guessing from image pixel brightness.
+static constexpr const char* kSensorSubdevPath = "/dev/v4l-subdev2";
+static constexpr int kSensorExposureMax = 3116;   // from v4l2-ctl --list-ctrls
+static constexpr int kSensorGainMin = 64;          // 1x gain
+static constexpr int kSensorGainMax = 61975;
+
+struct SensorAEParams {
+    int exposure{0};
+    int analogueGain{64};
+    bool valid{false};
+};
+
+static SensorAEParams readSensorAEParams() {
+    SensorAEParams params;
+    int fd = open(kSensorSubdevPath, O_RDONLY);
+    if (fd < 0) {
+        return params;
     }
 
-    // 低频调用(每N帧一次)下使用缩小+灰度均值更稳，避免手写采样在不同像素格式下偏差。
-    cv::Mat small;
-    cv::resize(frame, small, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
+    struct v4l2_control ctrl;
 
-    cv::Mat gray;
-    if (small.channels() == 3) {
-        cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
-    } else if (small.channels() == 1) {
-        gray = small;
-    } else {
-        return 0.0;
+    ctrl.id = V4L2_CID_EXPOSURE;
+    ctrl.value = 0;
+    if (ioctl(fd, VIDIOC_G_CTRL, &ctrl) == 0) {
+        params.exposure = ctrl.value;
     }
 
-    return cv::mean(gray)[0];
+    ctrl.id = V4L2_CID_ANALOGUE_GAIN;
+    ctrl.value = 0;
+    if (ioctl(fd, VIDIOC_G_CTRL, &ctrl) == 0) {
+        params.analogueGain = ctrl.value;
+    }
+
+    close(fd);
+    params.valid = true;
+    return params;
+}
+
+// ─── AE-derived brightness estimation ──────────────────────────────────
+// Convert sensor AE parameters (exposure ratio, gain ratio) into an
+// equivalent "brightness" value (0~150 scale) for IR-CUT switching and
+// brightness boost decisions. This replaces the old pixel-mean approach.
+//
+// Logic: rkaiq_3A_server increases exposure and gain as the scene gets darker.
+// Low exposure + low gain = bright scene → high brightness value.
+// High exposure + high gain = dark scene → low brightness value.
+//
+// The mapping is designed so that:
+//   - expRatio ~0.10, gainRatio ~0.00 → brightness ~130 (bright daylight)
+//   - expRatio ~0.30, gainRatio ~0.00 → brightness ~105 (overcast/indoor)
+//   - expRatio ~0.60, gainRatio ~0.05 → brightness ~70  (dim indoor)
+//   - expRatio ~0.90, gainRatio ~0.15 → brightness ~35  (very dark)
+//   - expRatio ~1.00, gainRatio ~0.50 → brightness ~15  (near-total darkness)
+static double estimateBrightnessFromAE(float expRatio, float gainRatio) {
+    // Combine exposure and gain into a single "darkness" metric.
+    // Exposure contributes more because it directly causes motion blur.
+    // Gain amplifies noise but doesn't blur.
+    float darkness = expRatio * 0.65f + gainRatio * 0.35f;
+    darkness = std::max(0.0f, std::min(1.0f, darkness));
+
+    // Map darkness 0.0~1.0 → brightness 140~10
+    // Using a slightly non-linear curve: darker scenes compress faster
+    double brightness = 140.0 - 130.0 * static_cast<double>(darkness);
+    return std::max(5.0, std::min(145.0, brightness));
 }
 
 // ─── 软件亮度补偿 ──────────────────────────────────────────────
-// 当 ISP 输出偏暗（filteredBrightness < CAMERA_BRIGHTNESS_BOOST_THRESHOLD）时，
+// 当 AE-derived brightness 偏暗（< boostThreshold）时，
 // 用 Gamma + linear gain 将画面提亮。Gamma 比纯线性更好：暗部拉得多、亮部不过曝。
 // 每帧只在需要时执行，性能开销约 3-4 ms（2688x1520 BGR, RK3568 A55）。
 static cv::Mat g_gammaLUT;
@@ -988,9 +1022,10 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
 
         if (!job.personRoi.empty() && job.personRoi.cols > 0 && job.personRoi.rows > 0) {
             DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
-            double sceneBrightness = environmentBrightness.load();
             AdaptiveCaptureThresholds adaptiveThresholds =
-                buildAdaptiveCaptureThresholds(config, sceneBrightness);
+                buildAdaptiveCaptureThresholds(config,
+                                               sensorExposureRatio.load(),
+                                               sensorGainRatio.load());
             Mat person_roi_resized;
             int target_width = min(config.faceInputMaxWidth, job.personRoi.cols);
             int target_height = static_cast<int>(job.personRoi.rows * target_width / (float)job.personRoi.cols);
@@ -1303,7 +1338,7 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         } else {
                                             char detail[320];
                                             std::snprintf(detail, sizeof(detail),
-                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f blur=%.2f motion=%.4f bright=%.1f ll=%.2f",
+                                                          "frontal=%d relaxed=%d weak=%d yaw=%.2f clarity=%.1f edge=%.2f blur=%.2f motion=%.4f ae_exp=%.2f ae_gain=%.3f ll=%.2f",
                                                           frontal_ok ? 1 : 0,
                                                           frontal_relaxed_ok ? 1 : 0,
                                                           weak_frontal_ok ? 1 : 0,
@@ -1312,7 +1347,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                           face_edge_occlusion,
                                                           current_blur_severity,
                                                           job.motionRatio,
-                                                          sceneBrightness,
+                                                          sensorExposureRatio.load(),
+                                                          sensorGainRatio.load(),
                                                           adaptiveThresholds.lowLightStrength);
                                             const char* reason = "quality_gate";
                                             if (config.requireFrontalFace && !weak_frontal_ok) {
@@ -1555,11 +1591,10 @@ void CameraTask::captureLoop() {
     std::vector<unsigned char> buffer(IMAGE_SIZE);
     auto captureFpsWindowStart = std::chrono::steady_clock::now();
     long captureFramesInWindow = 0;
-    int brightnessSampleCounter = 0;
+    int aeSampleCounter = 0;
     int whiteCandidateHits = 0;
     int blackCandidateHits = 0;
-    double lastBrightnessRaw = 0.0;
-    double filteredBrightness = -1.0;
+    double aeBrightness = -1.0;  // AE-derived brightness (replaces old pixel-mean)
 
     // 默认先使用白片，后续再按亮度阈值自动切换。
     g_lastIrCutSwitchTime = std::chrono::steady_clock::now() - std::chrono::seconds(3600);
@@ -1581,21 +1616,43 @@ void CameraTask::captureLoop() {
         DeviceConfig::CaptureDefaults capture = getCaptureConfigSnapshot();
         DeviceConfig::BrightnessBoostConfig boostConfig = getBrightnessBoostConfigSnapshot();
 
-        brightnessSampleCounter++;
-        int brightnessSampleInterval = std::max(1, capture.brightnessSampleInterval);
-        if (brightnessSampleCounter % brightnessSampleInterval == 0) {
-            double brightnessRaw = computeSceneBrightnessFast(frame);
-            lastBrightnessRaw = brightnessRaw;
-            filteredBrightness = updateFilteredBrightness(filteredBrightness, brightnessRaw);
-            environmentBrightness = filteredBrightness;
+        aeSampleCounter++;
+        int aeSampleInterval = std::max(1, capture.brightnessSampleInterval);
+        if (aeSampleCounter % aeSampleInterval == 0) {
+            // Read real AE parameters from sensor via V4L2.
+            SensorAEParams aeParams = readSensorAEParams();
+            if (aeParams.valid) {
+                float expRatio = static_cast<float>(aeParams.exposure) / static_cast<float>(std::max(1, kSensorExposureMax));
+                float gainRatio = static_cast<float>(aeParams.analogueGain - kSensorGainMin) /
+                                  static_cast<float>(std::max(1, kSensorGainMax - kSensorGainMin));
+                sensorExposureRatio = std::max(0.0f, std::min(1.0f, expRatio));
+                sensorGainRatio = std::max(0.0f, std::min(1.0f, gainRatio));
 
+                // Derive brightness from AE parameters (replaces old pixel-mean approach).
+                double rawAeBrightness = estimateBrightnessFromAE(sensorExposureRatio.load(),
+                                                                   sensorGainRatio.load());
+                // EMA smoothing to avoid jitter from rapid AE adjustments.
+                if (aeBrightness < 0.0) {
+                    aeBrightness = rawAeBrightness;
+                } else {
+                    double diff = std::fabs(rawAeBrightness - aeBrightness);
+                    double alpha = 0.20;
+                    if (diff >= 40.0) alpha = 0.75;
+                    else if (diff >= 20.0) alpha = 0.55;
+                    else if (diff >= 8.0) alpha = 0.35;
+                    aeBrightness = aeBrightness * (1.0 - alpha) + rawAeBrightness * alpha;
+                }
+                environmentBrightness = aeBrightness;
+            }
+
+            // ─── IR-CUT switching based on AE-derived brightness ───
             auto now = std::chrono::steady_clock::now();
             auto sinceLastSwitch = std::chrono::duration_cast<std::chrono::seconds>(now - g_lastIrCutSwitchTime).count();
             const double blackThreshold = brightnessBlackThreshold.load();
             if (sinceLastSwitch < kIrCutSettleAfterSwitchSec) {
                 whiteCandidateHits = 0;
                 blackCandidateHits = 0;
-            } else if (filteredBrightness >= capture.brightnessWhiteThreshold) {
+            } else if (aeBrightness >= capture.brightnessWhiteThreshold) {
                 whiteCandidateHits++;
                 blackCandidateHits = 0;
                 if (whiteCandidateHits >= kIrCutConsecutiveHits) {
@@ -1603,7 +1660,7 @@ void CameraTask::captureLoop() {
                     whiteCandidateHits = 0;
                     blackCandidateHits = 0;
                 }
-            } else if (filteredBrightness <= blackThreshold) {
+            } else if (aeBrightness >= 0.0 && aeBrightness <= blackThreshold) {
                 blackCandidateHits++;
                 whiteCandidateHits = 0;
                 if (blackCandidateHits >= kIrCutConsecutiveHits) {
@@ -1624,9 +1681,9 @@ void CameraTask::captureLoop() {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (latestFrameSeq == consumedFrameSeq) {
                 latestFrame = frame.clone();
-                if (filteredBrightness > boostConfig.boostMinFloor
-                    && filteredBrightness < boostConfig.boostThreshold) {
-                    boosted = applyBrightnessBoost(latestFrame, filteredBrightness, boostConfig);
+                if (aeBrightness > boostConfig.boostMinFloor
+                    && aeBrightness < boostConfig.boostThreshold) {
+                    boosted = applyBrightnessBoost(latestFrame, aeBrightness, boostConfig);
                 }
                 latestFrameSeq++;
                 published = true;
@@ -1641,13 +1698,14 @@ void CameraTask::captureLoop() {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - captureFpsWindowStart).count();
         if (elapsed >= 5) {
             double captureFps = static_cast<double>(captureFramesInWindow) / static_cast<double>(elapsed);
-            log_info("Capture FPS: fps=%.2f, brightness=%.1f(raw=%.1f), ircut=%s, black_th=%.1f, boost=%s",
+            log_info("Capture FPS: fps=%.2f, ae_brightness=%.1f, ircut=%s, black_th=%.1f, boost=%s, ae_exp=%.2f, ae_gain=%.3f",
                      captureFps,
                      environmentBrightness.load(),
-                     lastBrightnessRaw,
                      irCutModeToString(g_irCutMode),
                      brightnessBlackThreshold.load(),
-                     boosted ? "ON" : "off");
+                     boosted ? "ON" : "off",
+                     sensorExposureRatio.load(),
+                     sensorGainRatio.load());
             captureFpsWindowStart = now;
             captureFramesInWindow = 0;
         }
@@ -1681,9 +1739,10 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     static int personDetectCounter = 0;
     static std::vector<Track> cachedTracks;
     DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
-    double sceneBrightness = environmentBrightness.load();
     AdaptiveCaptureThresholds adaptiveThresholds =
-        buildAdaptiveCaptureThresholds(config, sceneBrightness);
+        buildAdaptiveCaptureThresholds(config,
+                                       sensorExposureRatio.load(),
+                                       sensorGainRatio.load());
 
     const float inv_diag_720p = 1.0f / std::sqrt((float)IMAGE_WIDTH * IMAGE_WIDTH + (float)IMAGE_HEIGHT * IMAGE_HEIGHT);
 
@@ -2020,11 +2079,12 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         }
         if (motion_ratio > adaptiveThresholds.maxMotionRejectRatio) {
             char detail[224];
-            std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f bright=%.1f ll=%.2f",
+            std::snprintf(detail, sizeof(detail), "motion=%.4f max=%.4f area=%.4f ae_exp=%.2f ae_gain=%.3f ll=%.2f",
                           motion_ratio,
                           adaptiveThresholds.maxMotionRejectRatio,
                           area_ratio,
-                          sceneBrightness,
+                          sensorExposureRatio.load(),
+                          sensorGainRatio.load(),
                           adaptiveThresholds.lowLightStrength);
             logTrackReject("gate", t.id, "motion_large", detail);
             continue;
