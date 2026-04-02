@@ -6,7 +6,6 @@
 #include <atomic>
 #include <csignal> 
 #include <chrono>
-#include <vector>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -16,19 +15,6 @@ extern "C" {
 }
 
 std::atomic<bool> running(true);
-
-namespace {
-
-struct PendingPersonUpload {
-    cv::Mat image;
-    std::string uniqueCode;
-    std::string targetPath;
-    std::chrono::steady_clock::time_point queuedAt;
-};
-
-constexpr auto kPendingPersonFlushTimeout = std::chrono::milliseconds(1800);
-
-}  // namespace
 
 void handleSignal(int) {
     running = false;
@@ -73,7 +59,7 @@ int main(int argc, char** argv) {
 
     std::atomic<bool> sleepMode(false);
     std::unordered_map<int, std::string> groupedUniqueCode;
-    std::unordered_map<int, PendingPersonUpload> pendingPersonById;
+    std::unordered_map<int, cv::Mat> pendingPersonById;
 
     auto generateUniqueCode12 = []() {
         static thread_local std::mt19937 rng(std::random_device{}());
@@ -85,44 +71,6 @@ int main(int argc, char** argv) {
             code.push_back(kChars[dist(rng)]);
         }
         return code;
-    };
-
-    auto flushPendingPersons = [&](bool flushAll, int excludeId) {
-        if (pendingPersonById.empty()) {
-            return;
-        }
-
-        auto now = std::chrono::steady_clock::now();
-        std::vector<int> readyIds;
-        readyIds.reserve(pendingPersonById.size());
-        for (const auto& entry : pendingPersonById) {
-            if (entry.first == excludeId) {
-                continue;
-            }
-
-            bool timed_out = now - entry.second.queuedAt >= kPendingPersonFlushTimeout;
-            if (flushAll || timed_out) {
-                readyIds.push_back(entry.first);
-            }
-        }
-
-        for (int id : readyIds) {
-            auto it = pendingPersonById.find(id);
-            if (it == pendingPersonById.end()) {
-                continue;
-            }
-
-            uploader.enqueue(it->second.image,
-                             config.cameraNumber,
-                             "person",
-                             it->second.targetPath,
-                             it->second.uniqueCode);
-            log_info("Pending person upload flushed: id=%d reason=%s", id, flushAll ? "scene_left" : "timeout");
-            pendingPersonById.erase(it);
-            if (flushAll) {
-                groupedUniqueCode.erase(id);
-            }
-        }
     };
 
     uploader.setUploadSuccessCallback([&](const UploadItem& item) {
@@ -138,7 +86,6 @@ int main(int argc, char** argv) {
         }
 
         if (eventType == "all_person_left") {
-            flushPendingPersons(true, -1);
             tcpClient.sendAllPersonLeft();
         }
     });
@@ -148,8 +95,6 @@ int main(int argc, char** argv) {
     });
 
     camera.setUploadCallback([&](const cv::Mat& img, int id, const std::string& type) {
-        flushPendingPersons(false, id);
-
         const std::string& targetPath = (type == "manual")
             ? config.uploadManualImagePath
             : config.uploadImagePath;
@@ -171,24 +116,14 @@ int main(int argc, char** argv) {
 
             if (type == "person") {
                 // 缓存人形图，等face到来时成对上传。
-                pendingPersonById[id] = PendingPersonUpload{
-                    img.clone(),
-                    uniqueCode,
-                    targetPath,
-                    std::chrono::steady_clock::now()
-                };
+                pendingPersonById[id] = img.clone();
                 return;
             }
 
             if (type == "face") {
                 auto personIt = pendingPersonById.find(id);
                 if (personIt != pendingPersonById.end()) {
-                    uniqueCode = personIt->second.uniqueCode;
-                    uploader.enqueue(personIt->second.image,
-                                     config.cameraNumber,
-                                     "person",
-                                     personIt->second.targetPath,
-                                     personIt->second.uniqueCode);
+                    uploader.enqueue(personIt->second, config.cameraNumber, "person", targetPath, uniqueCode);
                     pendingPersonById.erase(personIt);
                 } else {
                     log_warn("Face upload id=%d has no paired person image, sending face only", id);
