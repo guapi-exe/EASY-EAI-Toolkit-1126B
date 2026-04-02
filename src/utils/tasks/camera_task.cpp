@@ -371,25 +371,28 @@ MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
     }
 
     cv::Rect safe_focus = expandRectFromCenter(focus_box, 1.45f, reference.size());
+
+    // ── Stage 1: Compute sharpness for reference ──
     cv::Mat reference_gray;
     cv::cvtColor(reference, reference_gray, cv::COLOR_BGR2GRAY);
-    result.referenceFocus = computeGrayFocusVariance(reference_gray(safe_focus));
-    result.bestAlignedFocus = result.referenceFocus;
+    double reference_focus = computeGrayFocusVariance(reference_gray(safe_focus));
+    result.referenceFocus = reference_focus;
+    result.bestAlignedFocus = reference_focus;
+
+    // Collect candidate frames: reference + aligned history frames.
+    // Each entry: {frame, focus_variance}
+    struct FrameEntry {
+        cv::Mat frame;
+        double focus;
+    };
+    std::vector<FrameEntry> candidates;
+    candidates.reserve(history.size() + 1);
+    candidates.push_back({reference.clone(), reference_focus});
 
     cv::Mat reference_focus_f;
     reference_gray(safe_focus).convertTo(reference_focus_f, CV_32F);
     cv::GaussianBlur(reference_focus_f, reference_focus_f, cv::Size(0, 0), 0.8);
 
-    float blur_sigma = 1.10f + low_light_strength * 0.90f;
-    cv::Mat reference_base;
-    cv::GaussianBlur(reference, reference_base, cv::Size(0, 0), blur_sigma);
-
-    cv::Mat accum;
-    reference_base.convertTo(accum, CV_32FC3);
-    accum *= 1.28f;
-    cv::Mat weight_sum(reference.size(), CV_32F, cv::Scalar(1.28f));
-
-    cv::Mat sharpest = reference.clone();
     float similarity_sum = 0.0f;
     int similarity_count = 0;
 
@@ -407,6 +410,21 @@ MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
 
         cv::Mat candidate_gray;
         cv::cvtColor(candidate, candidate_gray, cv::COLOR_BGR2GRAY);
+
+        // ── Motion blur filter: reject frames with strong directional blur ──
+        cv::Mat gx, gy;
+        cv::Sobel(candidate_gray, gx, CV_32F, 1, 0, 3);
+        cv::Sobel(candidate_gray, gy, CV_32F, 0, 1, 3);
+        cv::Scalar gx_std, gy_std;
+        cv::meanStdDev(gx, cv::noArray(), gx_std);
+        cv::meanStdDev(gy, cv::noArray(), gy_std);
+        double ex = gx_std[0] * gx_std[0], ey = gy_std[0] * gy_std[0];
+        double dir_ratio = std::min(ex, ey) / (std::max(ex, ey) + 1e-6);
+        if (dir_ratio < 0.45) {
+            continue; // Severe directional blur — skip this frame.
+        }
+
+        // ── Phase correlation alignment ──
         cv::Mat candidate_focus_f;
         candidate_gray(safe_focus).convertTo(candidate_focus_f, CV_32F);
         cv::GaussianBlur(candidate_focus_f, candidate_focus_f, cv::Size(0, 0), 0.8);
@@ -424,6 +442,7 @@ MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
         cv::warpAffine(candidate, aligned, transform, reference.size(),
                        cv::INTER_LINEAR, cv::BORDER_REPLICATE);
 
+        // ── Similarity check ──
         cv::Mat aligned_gray;
         cv::cvtColor(aligned, aligned_gray, cv::COLOR_BGR2GRAY);
         cv::Mat diff;
@@ -433,32 +452,16 @@ MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
         cv::Mat similarity = 1.0f - (diff_f - 14.0f) / 62.0f;
         cv::max(similarity, 0.0f, similarity);
         cv::min(similarity, 1.0f, similarity);
-        cv::GaussianBlur(similarity, similarity, cv::Size(0, 0), 1.2);
-
         float mean_similarity = static_cast<float>(cv::mean(similarity(safe_focus))[0]);
         if (mean_similarity < kMultiFrameFusionMinSimilarity) {
             continue;
         }
 
-        cv::Mat aligned_base;
-        cv::GaussianBlur(aligned, aligned_base, cv::Size(0, 0), blur_sigma);
-        cv::Mat aligned_base_f;
-        aligned_base.convertTo(aligned_base_f, CV_32FC3);
-
-        float frame_weight_scale = 0.40f + low_light_strength * 0.18f;
-        if (motion_ratio > 0.010f) {
-            frame_weight_scale *= 0.92f;
-        }
-        cv::Mat frame_weight = similarity * frame_weight_scale;
-        std::vector<cv::Mat> weight_channels(3, frame_weight);
-        cv::Mat frame_weight3;
-        cv::merge(weight_channels, frame_weight3);
-        accum += aligned_base_f.mul(frame_weight3);
-        weight_sum += frame_weight;
-
+        // ── Sharpness of aligned frame ──
         double aligned_focus = computeGrayFocusVariance(aligned_gray(safe_focus));
-        if (aligned_focus > result.bestAlignedFocus * 1.02) {
-            sharpest = aligned;
+
+        candidates.push_back({std::move(aligned), aligned_focus});
+        if (aligned_focus > result.bestAlignedFocus) {
             result.bestAlignedFocus = aligned_focus;
         }
 
@@ -475,29 +478,74 @@ MultiFrameFusionResult fuseTrackHistoryPersonRoi(const cv::Mat& reference,
 
     result.meanSimilarity = similarity_count > 0 ? (similarity_sum / similarity_count) : 0.0f;
 
-    cv::Mat safe_weight = weight_sum + 1e-4f;
-    std::vector<cv::Mat> safe_weight_channels(3, safe_weight);
-    cv::Mat safe_weight3;
-    cv::merge(safe_weight_channels, safe_weight3);
-    cv::Mat fused_base = accum / safe_weight3;
+    // ── Stage 2: Best-frame selection + median temporal denoising ──
 
-    cv::Mat sharpest_base;
-    cv::GaussianBlur(sharpest, sharpest_base, cv::Size(0, 0), blur_sigma);
-    cv::Mat sharpest_f;
-    sharpest.convertTo(sharpest_f, CV_32FC3);
-    cv::Mat sharpest_base_f;
-    sharpest_base.convertTo(sharpest_base_f, CV_32FC3);
-    cv::Mat detail = sharpest_f - sharpest_base_f;
+    // Find the sharpest frame as base.
+    double best_focus = 0.0;
+    int best_idx = 0;
+    for (int i = 0; i < static_cast<int>(candidates.size()); i++) {
+        if (candidates[i].focus > best_focus) {
+            best_focus = candidates[i].focus;
+            best_idx = i;
+        }
+    }
 
-    cv::Mat reference_f;
-    reference.convertTo(reference_f, CV_32FC3);
-    float detail_gain = 0.78f + low_light_strength * 0.14f;
-    float reference_mix = 0.16f + std::max(0.0f, motion_ratio - 0.006f) * 10.0f;
-    reference_mix = std::max(0.16f, std::min(0.34f, reference_mix));
+    // Filter: keep only frames with focus >= 60% of the best (reject blurry frames).
+    double focus_threshold = best_focus * 0.60;
+    std::vector<cv::Mat> good_frames;
+    good_frames.reserve(candidates.size());
+    for (auto& entry : candidates) {
+        if (entry.focus >= focus_threshold) {
+            good_frames.push_back(std::move(entry.frame));
+        }
+    }
 
-    cv::Mat fused_f = fused_base + detail * detail_gain;
-    fused_f = fused_f * (1.0f - reference_mix) + reference_f * reference_mix;
-    fused_f.convertTo(result.fused, CV_8UC3);
+    if (good_frames.size() <= 1) {
+        // Only 1 good frame — return it directly.
+        if (!good_frames.empty()) {
+            result.fused = good_frames[0].clone();
+        }
+        return result;
+    }
+
+    if (good_frames.size() == 2) {
+        // 2 frames — pick the sharper one (median of 2 is just average, not useful).
+        result.fused = good_frames[0].clone();
+        return result;
+    }
+
+    // ── 3+ frames: pixel-wise median fusion ──
+    // Median naturally rejects motion blur artifacts (outlier pixels).
+    int rows = good_frames[0].rows;
+    int cols = good_frames[0].cols;
+    int n = static_cast<int>(good_frames.size());
+    int mid = n / 2;
+    result.fused = cv::Mat(rows, cols, CV_8UC3);
+
+    // Ensure all frames are continuous for fast access.
+    for (auto& f : good_frames) {
+        if (!f.isContinuous()) {
+            f = f.clone();
+        }
+    }
+
+    for (int r = 0; r < rows; r++) {
+        const uint8_t* row_ptrs[7]; // max 7 frames (kMultiFrameFusionHistorySize + 1 + margin)
+        for (int f = 0; f < n; f++) {
+            row_ptrs[f] = good_frames[f].ptr<uint8_t>(r);
+        }
+        uint8_t* out_ptr = result.fused.ptr<uint8_t>(r);
+
+        for (int c = 0; c < cols * 3; c++) {
+            uint8_t vals[7];
+            for (int f = 0; f < n; f++) {
+                vals[f] = row_ptrs[f][c];
+            }
+            std::nth_element(vals, vals + mid, vals + n);
+            out_ptr[c] = vals[mid];
+        }
+    }
+
     return result;
 }
 } // namespace
@@ -1046,7 +1094,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                         int fusion_frame_count = 0;
                                         float fusion_mean_similarity = 0.0f;
                                         bool fusion_enabled =
-                                            adaptiveThresholds.lowLightStrength >= kMultiFrameFusionLowLightMinStrength &&
+                                            (adaptiveThresholds.lowLightStrength >= kMultiFrameFusionLowLightMinStrength ||
+                                             job.motionRatio > 0.005f) &&
                                             !job.fusionHistory.empty() &&
                                             job.motionRatio <= adaptiveThresholds.maxMotionRejectRatio;
                                         if (fusion_enabled) {
@@ -1846,7 +1895,24 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             }
         }
         auto& roi_history = trackPersonRoiHistory[t.id];
-        roi_history.push_back(person_roi.clone());
+        // Quality gate: only store frames that aren't severely blurred.
+        // This ensures the fusion pool has a minimum quality floor.
+        {
+            cv::Mat roi_gray;
+            cv::cvtColor(person_roi, roi_gray, cv::COLOR_BGR2GRAY);
+            cv::Mat roi_gx, roi_gy;
+            cv::Sobel(roi_gray, roi_gx, CV_32F, 1, 0, 3);
+            cv::Sobel(roi_gray, roi_gy, CV_32F, 0, 1, 3);
+            cv::Scalar gx_std, gy_std;
+            cv::meanStdDev(roi_gx, cv::noArray(), gx_std);
+            cv::meanStdDev(roi_gy, cv::noArray(), gy_std);
+            double ex = gx_std[0] * gx_std[0], ey = gy_std[0] * gy_std[0];
+            double dir_ratio = std::min(ex, ey) / (std::max(ex, ey) + 1e-6);
+            // Only store if not severely directionally blurred.
+            if (dir_ratio >= 0.40) {
+                roi_history.push_back(person_roi.clone());
+            }
+        }
         while (roi_history.size() > kMultiFrameFusionHistorySize) {
             roi_history.pop_front();
         }
