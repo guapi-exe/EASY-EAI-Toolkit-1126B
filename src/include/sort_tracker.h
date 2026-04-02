@@ -11,33 +11,34 @@
 #include <functional>
 #include <unordered_set>
 
-
 using namespace cv;
 
 struct Detection {
     float x1, y1, x2, y2;
-    cv::Mat roi;  // 用于计算颜色直方图
+    cv::Mat roi;
     float prop;
 };
 
 struct Track {
     int id;
-    ekf_t ekf;    // 使用 tinyEKF
-    cv::Mat hist; // 颜色直方图
+    ekf_t ekf;
+    cv::Mat hist;
     cv::Rect2f bbox;
+    cv::Rect2f smoothed_bbox;
+    cv::Rect2f last_det_bbox;
     float prop;
     int age;
-    int missed; // 丢失帧数
-    int hits;   // 命中次数，用于稳定性评估  
+    int missed;
+    int hits;
     bool active;
-    bool confirmed; // 是否已确认的track
-    std::vector<float> bbox_history; // 检测框面积历史
-    bool is_approaching; // 是否正在接近摄像机
-    float best_area; // 最佳拍照时的面积
-    double best_clarity; // 最佳拍照时的清晰度
-    bool has_captured; // 是否已经拍照
-    
-    // 存储每帧的评分和图像数据
+    bool confirmed;
+    std::vector<float> bbox_history;
+    float bbox_jitter;
+    bool is_approaching;
+    float best_area;
+    double best_clarity;
+    bool has_captured;
+
     struct FrameData {
         double score;
         cv::Mat person_roi;
@@ -54,15 +55,16 @@ struct Track {
         float motion_ratio;
         float blur_severity;
     };
-    std::vector<FrameData> frame_candidates; // 候选帧数据
+    std::vector<FrameData> frame_candidates;
 };
 
 void sort_init();
 std::vector<Track> sort_update(const std::vector<Detection>& dets);
-std::vector<Track> get_expiring_tracks(); // 获取即将过期的tracks
+std::vector<Track> get_expiring_tracks();
 void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
-                        std::unordered_set<int>* person_ids, std::unordered_set<int>* face_ids);
+                         std::unordered_set<int>* person_ids,
+                         std::unordered_set<int>* face_ids);
 void set_max_frame_candidates(size_t maxFrameCandidates);
-void add_frame_candidate(int track_id, const Track::FrameData& frame_data); // 添加候选帧
+void add_frame_candidate(int track_id, const Track::FrameData& frame_data);
 
 #endif

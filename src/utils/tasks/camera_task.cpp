@@ -57,6 +57,10 @@ constexpr float kLowLightMaxBlurSeverityScale = 0.82f;
 constexpr float kLowLightFallbackMaxBlurSeverityScale = 0.74f;
 constexpr float kLowLightMinClarityScale = 1.10f;
 constexpr float kLowLightFallbackMinClarityScale = 1.18f;
+constexpr int kApproachPositiveFramesRequired = 2;
+constexpr int kApproachNegativeFramesRequired = 3;
+constexpr float kApproachJitterFreezeThreshold = 0.16f;
+constexpr float kApproachJitterRejectThreshold = 0.30f;
 
 float clampUnit(float value) {
     return std::max(0.0f, std::min(1.0f, value));
@@ -288,6 +292,25 @@ static bool applyBrightnessBoost(cv::Mat& frame,
         }
     }
     return true;
+}
+
+bool isValidTrackRect(const cv::Rect2f& rect) {
+    return rect.width > 1.0f && rect.height > 1.0f;
+}
+
+cv::Rect2f selectTrackRect720p(const Track& track) {
+    return isValidTrackRect(track.smoothed_bbox) ? track.smoothed_bbox : track.bbox;
+}
+
+float computeTrackAreaTrendRatio(const Track& track) {
+    if (track.bbox_history.size() < 4) {
+        return 0.0f;
+    }
+
+    size_t span = std::min<size_t>(4, track.bbox_history.size() - 1);
+    float area_now = track.bbox_history.back();
+    float area_prev = track.bbox_history[track.bbox_history.size() - 1 - span];
+    return (area_now - area_prev) / (area_prev + 1e-6f);
 }
 } // namespace
 
@@ -913,14 +936,29 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     float motion_penalty = std::min(1.25f, job.motionRatio / std::max(1e-6f, adaptiveThresholds.maxMotionRatio));
                                                     float blur_severity_penalty = std::min(1.25f, current_blur_severity / std::max(1e-6f, adaptiveThresholds.maxBlurSeverity));
                                                     float candidate_penalty = strong_candidate_ok ? 0.0f : config.fallbackScorePenalty;
+                                                    float clarity_gain = std::max(0.0f, clarity_norm - 1.0f);
+                                                    float face_confidence_bonus = std::min(1.0f, std::max(0.0f, best_face.score)) * 90.0f;
+                                                    float frontal_bonus = frontal_ok ? 135.0f : (frontal_relaxed_ok ? 75.0f : 20.0f);
+                                                    float crop_margin_bonus =
+                                                        std::min(1.6f, crop_min_margin / std::max(1e-6f, required_crop_margin)) * 75.0f;
+                                                    float face_size_bonus =
+                                                        std::min(1.8f, face_area_ratio / std::max(1e-6f, config.faceMinAreaInPerson)) * 45.0f;
+                                                    float yaw_penalty =
+                                                        std::min(1.25f, yaw / std::max(0.10f, strong_candidate_ok ? config.maxYaw : config.fallbackMaxYaw)) * 60.0f;
 
                                                     Track::FrameData frame_data;
-                                                    frame_data.score = current_clarity * (quality_weight + 0.10f) +
-                                                                       clarity_norm * 120.0f +
-                                                                       area_score * 1000 * area_weight -
-                                                                       occlusion_penalty * config.occlusionScorePenalty -
-                                                                       motion_penalty * config.motionScorePenalty -
-                                                                       blur_severity_penalty * config.blurSeverityScorePenalty -
+                                                    frame_data.score = current_clarity * (0.55f + quality_weight * 0.20f) +
+                                                                       clarity_norm * 220.0f +
+                                                                       clarity_gain * 160.0f +
+                                                                       frontal_bonus +
+                                                                       face_confidence_bonus +
+                                                                       crop_margin_bonus +
+                                                                       face_size_bonus +
+                                                                       area_score * 1000 * area_weight * 0.22f -
+                                                                       occlusion_penalty * config.occlusionScorePenalty * 1.15f -
+                                                                       motion_penalty * config.motionScorePenalty * 1.30f -
+                                                                       blur_severity_penalty * config.blurSeverityScorePenalty * 1.45f -
+                                                                       yaw_penalty -
                                                                        candidate_penalty;
                                                     frame_data.person_roi = person_aligned;
                                                     frame_data.face_roi = face_aligned;
@@ -1106,6 +1144,11 @@ void CameraTask::run() {
     }
     log_info("CameraTask: face model loaded successfully in %ld seconds", elapsed.count());
     sort_init();
+    lastTrackCenters.clear();
+    trackApproachStates.clear();
+    reportedPersonIds.clear();
+    candidateRoundRobinOffset = 0;
+    hadPersonsInScene = false;
 
     set_upload_callback([this](const cv::Mat& img, int id, const std::string& type) {
         if (uploadCallback) {
@@ -1417,7 +1460,8 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     std::unordered_map<int, cv::Rect> trackBoxes720p;
     trackBoxes720p.reserve(tracks.size());
     for (const auto& tr : tracks) {
-        cv::Rect box((int)tr.bbox.x, (int)tr.bbox.y, (int)tr.bbox.width, (int)tr.bbox.height);
+        cv::Rect2f stable_box = selectTrackRect720p(tr);
+        cv::Rect box((int)stable_box.x, (int)stable_box.y, (int)stable_box.width, (int)stable_box.height);
         if (box.width > 0 && box.height > 0) {
             trackBoxes720p.emplace(tr.id, box);
         }
@@ -1450,7 +1494,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         auto& t = tracks[(candidateRoundRobinOffset + index) % track_count];
         activeTrackIds.insert(t.id);
 
-        Rect bbox_720p((int)t.bbox.x, (int)t.bbox.y, (int)t.bbox.width, (int)t.bbox.height);
+        cv::Rect2f stable_bbox_720p = selectTrackRect720p(t);
+        Rect bbox_720p((int)stable_bbox_720p.x, (int)stable_bbox_720p.y,
+                       (int)stable_bbox_720p.width, (int)stable_bbox_720p.height);
         if (bbox_720p.width <=0 || bbox_720p.height <=0) continue;
 
         cv::Point2f curr_center_720p(bbox_720p.x + bbox_720p.width * 0.5f,
@@ -1521,25 +1567,89 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
 
         bool near_ok = area_ratio >= config.nearAreaRatio;
         bool approach_ok = t.is_approaching || near_ok || !config.requireApproach;
+        auto& approachState = trackApproachStates[t.id];
+        float bbox_jitter = t.bbox_jitter;
+        bool trend_ready = t.bbox_history.size() >= 4;
+        bool history_advanced = t.bbox_history.size() != approachState.lastHistorySize;
+        bool jitter_freeze = bbox_jitter >= kApproachJitterFreezeThreshold && !near_ok;
+
+        area_trend_ratio = computeTrackAreaTrendRatio(t);
+        if (trend_ready && history_advanced && !jitter_freeze) {
+            if (area_trend_ratio > config.approachRatioPos) {
+                approachState.positiveHits = std::min(approachState.positiveHits + 1,
+                                                      kApproachPositiveFramesRequired + 1);
+                if (approachState.negativeHits > 0) {
+                    approachState.negativeHits--;
+                }
+            } else if (area_trend_ratio < config.approachRatioNeg) {
+                approachState.negativeHits = std::min(approachState.negativeHits + 1,
+                                                      kApproachNegativeFramesRequired + 1);
+                if (approachState.positiveHits > 0) {
+                    approachState.positiveHits--;
+                }
+            } else {
+                approachState.positiveHits = std::max(0, approachState.positiveHits - 1);
+                approachState.negativeHits = std::max(0, approachState.negativeHits - 1);
+            }
+        } else if (history_advanced && jitter_freeze) {
+            approachState.positiveHits = std::max(0, approachState.positiveHits - 1);
+            approachState.negativeHits = std::max(0, approachState.negativeHits - 1);
+        }
+
+        if (approachState.positiveHits >= kApproachPositiveFramesRequired) {
+            approachState.isApproaching = true;
+        }
+        int negative_required = near_ok ? (kApproachNegativeFramesRequired + 1)
+                                        : kApproachNegativeFramesRequired;
+        if (approachState.negativeHits >= negative_required) {
+            approachState.isApproaching = false;
+        }
+
+        approachState.lastTrend = area_trend_ratio;
+        approachState.lastJitter = bbox_jitter;
+        approachState.lastAreaRatio = area_ratio;
+        approachState.lastHistorySize = t.bbox_history.size();
+        t.is_approaching = approachState.isApproaching;
+        approach_ok = t.is_approaching || near_ok || !config.requireApproach;
+        bool moving_away = trend_ready &&
+                           !jitter_freeze &&
+                           area_trend_ratio < config.approachRatioNeg &&
+                           approachState.negativeHits >= 2 &&
+                           !near_ok;
         if (t.has_captured) {
             logTrackReject("gate", t.id, "already_captured", "track already captured");
             continue;
         }
+        if (bbox_jitter > kApproachJitterRejectThreshold && !near_ok) {
+            char detail[224];
+            std::snprintf(detail, sizeof(detail), "jitter=%.3f trend=%.3f area=%.4f near=%d",
+                          bbox_jitter,
+                          area_trend_ratio,
+                          area_ratio,
+                          near_ok ? 1 : 0);
+            logTrackReject("gate", t.id, "bbox_jitter", detail);
+            continue;
+        }
         if (!approach_ok) {
             char detail[224];
-            std::snprintf(detail, sizeof(detail), "approaching=%d near=%d trend=%.3f area=%.4f",
+            std::snprintf(detail, sizeof(detail),
+                          "approaching=%d near=%d trend=%.3f jitter=%.3f pos=%d neg=%d area=%.4f",
                           t.is_approaching ? 1 : 0,
                           near_ok ? 1 : 0,
                           area_trend_ratio,
+                          bbox_jitter,
+                          approachState.positiveHits,
+                          approachState.negativeHits,
                           area_ratio);
             logTrackReject("gate", t.id, "not_approaching", detail);
             continue;
         }
-        if (area_trend_ratio < config.approachRatioNeg && !near_ok) {
+        if (moving_away) {
             char detail[192];
-            std::snprintf(detail, sizeof(detail), "trend=%.3f near=%d area=%.4f",
+            std::snprintf(detail, sizeof(detail), "trend=%.3f jitter=%.3f neg=%d area=%.4f",
                           area_trend_ratio,
-                          near_ok ? 1 : 0,
+                          bbox_jitter,
+                          approachState.negativeHits,
                           area_ratio);
             logTrackReject("gate", t.id, "moving_away", detail);
             continue;
@@ -1601,6 +1711,14 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     for (auto it = lastTrackCenters.begin(); it != lastTrackCenters.end(); ) {
         if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
             it = lastTrackCenters.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = trackApproachStates.begin(); it != trackApproachStates.end(); ) {
+        if (activeTrackIds.find(it->first) == activeTrackIds.end()) {
+            it = trackApproachStates.erase(it);
         } else {
             ++it;
         }

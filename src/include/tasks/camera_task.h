@@ -1,4 +1,5 @@
 #pragma once
+
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include "device_config.h"
@@ -35,8 +36,7 @@ public:
     double getBrightnessBlackThreshold() const { return brightnessBlackThreshold.load(); }
     void captureSnapshot();
     double getEnvironmentBrightness() const { return environmentBrightness.load(); }
-    
-    // 帧数统计相关函数
+
     long getTotalFrames() const { return totalFrames; }
     double getCurrentFPS() const { return currentFPS; }
     void resetFrameCount() { totalFrames = 0; }
@@ -50,6 +50,16 @@ private:
         float motionRatio;
     };
 
+    struct TrackApproachState {
+        bool isApproaching{false};
+        int positiveHits{0};
+        int negativeHits{0};
+        float lastTrend{0.0f};
+        float lastJitter{0.0f};
+        float lastAreaRatio{0.0f};
+        size_t lastHistorySize{0};
+    };
+
     void run();
     void captureLoop();
     void candidateEvalLoop(rknn_context faceCtx);
@@ -61,10 +71,10 @@ private:
     void logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail);
     void clearTrackReject(const char* stage, int trackId);
     void processFrame(const cv::Mat& frame, rknn_context personCtx);
-    void updateFPS(); // 更新FPS计算
+    void updateFPS();
     DeviceConfig::CaptureDefaults getCaptureConfigSnapshot() const;
     DeviceConfig::BrightnessBoostConfig getBrightnessBoostConfigSnapshot() const;
-    
+
     std::string personModelPath;
     std::string faceModelPath;
     int cameraIndex;
@@ -98,19 +108,17 @@ private:
 
     std::unordered_set<int> capturedPersonIds;
     std::unordered_set<int> capturedFaceIds;
-    
-    // 帧数统计相关成员变量
+
     std::atomic<long> totalFrames{0};
     std::atomic<double> currentFPS{0.0};
     std::chrono::steady_clock::time_point lastFPSUpdate;
     std::chrono::steady_clock::time_point startTime;
     long framesAtLastUpdate{0};
-    
-    // RGA硬件加速缓冲区
+
     unsigned char* resized_buffer_720p{nullptr};
 
-    // 运动稳定性：记录每个track上一次中心点（720p坐标）
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
+    std::unordered_map<int, TrackApproachState> trackApproachStates;
     size_t candidateRoundRobinOffset{0};
 
     std::unordered_set<int> reportedPersonIds;
