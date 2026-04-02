@@ -84,7 +84,6 @@ file(GLOB api_srcs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/tasks/camera/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/dma/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/commonApi/uart/*.c
