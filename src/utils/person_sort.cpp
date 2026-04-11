@@ -59,6 +59,33 @@ static constexpr float TRACK_BBOX_JITTER_ALPHA = 0.28f;
 static float g_capture_min_area_ratio = CAPTURE_MIN_AREA_RATIO;
 static float g_capture_near_area_ratio = CAPTURE_NEAR_AREA_RATIO;
 static float g_capture_max_person_occlusion = CAPTURE_MAX_PERSON_OCCLUSION;
+static bool g_capture_require_approach = CAPTURE_REQUIRE_APPROACH != 0;
+static constexpr size_t TRAJECTORY_HISTORY_LIMIT = 24;
+static constexpr size_t TRAJECTORY_EVAL_SAMPLES = 8;
+static constexpr float TRAJECTORY_MIN_BOTTOM_TRAVEL = 0.020f;
+static constexpr float TRAJECTORY_MIN_AREA_TRAVEL = 0.010f;
+static constexpr float TRAJECTORY_SCORE_THRESHOLD = 0.12f;
+static constexpr float TRAJECTORY_RETURN_SCORE_THRESHOLD = 0.10f;
+
+struct TrackTrajectoryDecision {
+    TrackTrajectoryDirection direction{TrackTrajectoryDirection::Unknown};
+    float score{0.0f};
+    float bottom_start{0.0f};
+    float bottom_end{0.0f};
+    float area_start{0.0f};
+    float area_end{0.0f};
+    float bottom_travel{0.0f};
+    float area_travel{0.0f};
+    float lateral_travel{0.0f};
+    float peak_bottom{0.0f};
+    float peak_area{0.0f};
+    float approach_peak_score{0.0f};
+    float return_score{0.0f};
+    int peak_index{-1};
+    bool reversed_after_approach{false};
+    bool reliable{false};
+    int samples{0};
+};
 
 static Track create_track(const Detection& det, int id, bool already_captured = false);
 
@@ -115,6 +142,231 @@ static cv::Rect2f stable_track_bbox(const Track& t) {
     return clamp_bbox(t.bbox);
 }
 
+static const char* track_trajectory_direction_to_string(TrackTrajectoryDirection direction) {
+    switch (direction) {
+        case TrackTrajectoryDirection::Approaching:
+            return "approaching";
+        case TrackTrajectoryDirection::Leaving:
+            return "leaving";
+        default:
+            return "unknown";
+    }
+}
+
+static float mean_range(const std::vector<float>& values, size_t begin, size_t end) {
+    if (begin >= end || begin >= values.size()) {
+        return 0.0f;
+    }
+    end = std::min(end, values.size());
+    float sum = 0.0f;
+    for (size_t i = begin; i < end; ++i) {
+        sum += values[i];
+    }
+    return sum / static_cast<float>(end - begin);
+}
+
+static float compute_trajectory_delta_score(float bottom_from,
+                                            float bottom_to,
+                                            float area_from,
+                                            float area_to) {
+    float area_delta_ratio = (area_to - area_from) / std::max(area_from, 1e-4f);
+    float bottom_component = (bottom_to - bottom_from) * 2.4f;
+    float area_component = std::tanh(area_delta_ratio * 0.85f);
+    return bottom_component * 0.68f + area_component * 0.32f;
+}
+
+static void append_track_trajectory_sample(Track& t, const cv::Rect2f& bbox) {
+    cv::Point2f bottom_center(bbox.x + bbox.width * 0.5f,
+                              bbox.y + bbox.height);
+    t.trajectory_history.push_back(bottom_center);
+    if (t.trajectory_history.size() > TRAJECTORY_HISTORY_LIMIT) {
+        t.trajectory_history.erase(t.trajectory_history.begin());
+    }
+
+    float area_ratio = bbox.area() /
+        static_cast<float>(IMAGE_WIDTH * IMAGE_HEIGHT);
+    t.max_area_ratio = std::max(t.max_area_ratio, area_ratio);
+}
+
+static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
+    TrackTrajectoryDecision decision;
+
+    size_t sample_count = std::min(t.trajectory_history.size(), t.bbox_history.size());
+    if (sample_count < 5) {
+        return decision;
+    }
+
+    const size_t recent_count = std::min(sample_count, TRAJECTORY_EVAL_SAMPLES);
+    const size_t start_index = sample_count - recent_count;
+    const size_t edge_window = std::max<size_t>(2, recent_count / 3);
+
+    std::vector<float> bottom_history;
+    std::vector<float> area_history;
+    bottom_history.reserve(recent_count);
+    area_history.reserve(recent_count);
+
+    const float inv_height = 1.0f / static_cast<float>(IMAGE_HEIGHT);
+    const float inv_width = 1.0f / static_cast<float>(IMAGE_WIDTH);
+    const float inv_area = 1.0f / static_cast<float>(IMAGE_WIDTH * IMAGE_HEIGHT);
+
+    for (size_t i = start_index; i < sample_count; ++i) {
+        bottom_history.push_back(t.trajectory_history[i].y * inv_height);
+        area_history.push_back(t.bbox_history[i] * inv_area);
+    }
+
+    decision.samples = static_cast<int>(recent_count);
+    decision.bottom_start = mean_range(bottom_history, 0, edge_window);
+    decision.bottom_end = mean_range(bottom_history, recent_count - edge_window, recent_count);
+    decision.area_start = mean_range(area_history, 0, edge_window);
+    decision.area_end = mean_range(area_history, recent_count - edge_window, recent_count);
+    decision.peak_bottom = bottom_history[0];
+    decision.peak_area = area_history[0];
+    decision.peak_index = 0;
+
+    float bottom_signed = 0.0f;
+    float area_signed = 0.0f;
+    for (size_t i = 1; i < recent_count; ++i) {
+        float bottom_step = bottom_history[i] - bottom_history[i - 1];
+        float area_step = area_history[i] - area_history[i - 1];
+        decision.bottom_travel += std::fabs(bottom_step);
+        decision.area_travel += std::fabs(area_step);
+        bottom_signed += bottom_step;
+        area_signed += area_step;
+
+        const cv::Point2f& prev = t.trajectory_history[start_index + i - 1];
+        const cv::Point2f& curr = t.trajectory_history[start_index + i];
+        decision.lateral_travel += std::fabs(curr.x - prev.x) * inv_width;
+    }
+
+    for (size_t i = 1; i < recent_count; ++i) {
+        float area_rel = area_history[i] / std::max(g_capture_near_area_ratio, 1e-4f);
+        float best_area_rel = decision.peak_area / std::max(g_capture_near_area_ratio, 1e-4f);
+        float sample_proximity = bottom_history[i] * 0.68f + std::tanh(area_rel) * 0.32f;
+        float peak_proximity = decision.peak_bottom * 0.68f + std::tanh(best_area_rel) * 0.32f;
+        if (sample_proximity > peak_proximity) {
+            decision.peak_bottom = bottom_history[i];
+            decision.peak_area = area_history[i];
+            decision.peak_index = static_cast<int>(i);
+        }
+    }
+
+    if (decision.bottom_travel < TRAJECTORY_MIN_BOTTOM_TRAVEL &&
+        decision.area_travel < TRAJECTORY_MIN_AREA_TRAVEL) {
+        return decision;
+    }
+
+    float bottom_consistency =
+        std::fabs(bottom_signed) / std::max(decision.bottom_travel, 1e-4f);
+    float area_consistency =
+        std::fabs(area_signed) / std::max(decision.area_travel, 1e-4f);
+    float area_delta_ratio =
+        (decision.area_end - decision.area_start) / std::max(decision.area_start, 1e-4f);
+
+    decision.score = compute_trajectory_delta_score(decision.bottom_start,
+                                                    decision.bottom_end,
+                                                    decision.area_start,
+                                                    decision.area_end);
+    decision.approach_peak_score = compute_trajectory_delta_score(decision.bottom_start,
+                                                                  decision.peak_bottom,
+                                                                  decision.area_start,
+                                                                  decision.peak_area);
+    decision.return_score = compute_trajectory_delta_score(decision.bottom_end,
+                                                           decision.peak_bottom,
+                                                           decision.area_end,
+                                                           decision.peak_area);
+
+    bool mostly_sideways =
+        decision.lateral_travel > decision.bottom_travel * 1.8f &&
+        std::fabs(area_delta_ratio) < 0.18f;
+    if (mostly_sideways) {
+        decision.score *= 0.55f;
+        decision.approach_peak_score *= 0.55f;
+        decision.return_score *= 0.55f;
+    }
+
+    decision.reliable =
+        bottom_consistency >= 0.42f ||
+        area_consistency >= 0.52f ||
+        std::fabs(area_delta_ratio) >= 0.55f;
+
+    bool peak_before_end = decision.peak_index >= edge_window &&
+                           decision.peak_index < static_cast<int>(recent_count - edge_window);
+    if (decision.reliable &&
+        peak_before_end &&
+        decision.approach_peak_score >= TRAJECTORY_SCORE_THRESHOLD &&
+        decision.return_score >= TRAJECTORY_RETURN_SCORE_THRESHOLD) {
+        decision.reversed_after_approach = true;
+    }
+
+    if (!decision.reliable) {
+        return decision;
+    }
+
+    if (decision.score >= TRAJECTORY_SCORE_THRESHOLD) {
+        decision.direction = TrackTrajectoryDirection::Approaching;
+    } else if (decision.score <= -TRAJECTORY_SCORE_THRESHOLD) {
+        decision.direction = TrackTrajectoryDirection::Leaving;
+    }
+
+    return decision;
+}
+
+static void update_track_trajectory_state(Track& t) {
+    TrackTrajectoryDecision decision = evaluate_track_trajectory(t);
+    t.trajectory_direction = decision.direction;
+    t.trajectory_score = decision.score;
+    t.is_approaching = decision.direction == TrackTrajectoryDirection::Approaching;
+}
+
+static bool should_upload_track_by_trajectory(const Track& t,
+                                              TrackTrajectoryDecision* out_decision,
+                                              const char** reason) {
+    TrackTrajectoryDecision decision = evaluate_track_trajectory(t);
+    if (out_decision) {
+        *out_decision = decision;
+    }
+
+    if (!g_capture_require_approach) {
+        if (reason) {
+            *reason = "approach_gate_disabled";
+        }
+        return true;
+    }
+
+    if (decision.reversed_after_approach) {
+        if (reason) {
+            *reason = "trajectory_uturn_return";
+        }
+        return false;
+    }
+
+    if (decision.direction == TrackTrajectoryDirection::Leaving) {
+        if (reason) {
+            *reason = "trajectory_leaving";
+        }
+        return false;
+    }
+
+    if (decision.direction == TrackTrajectoryDirection::Approaching) {
+        if (reason) {
+            *reason = "trajectory_approaching";
+        }
+        return true;
+    }
+
+    if (t.max_area_ratio >= g_capture_near_area_ratio) {
+        if (reason) {
+            *reason = "trajectory_unknown_but_near";
+        }
+        return true;
+    }
+
+    if (reason) {
+        *reason = "trajectory_unknown";
+    }
+    return false;
+}
+
 void sort_init() { 
     std::unique_lock<std::mutex> lock(tracks_mutex);
     tracks.clear(); 
@@ -143,11 +395,13 @@ void set_max_frame_candidates(size_t maxFrameCandidates) {
 
 void set_capture_sort_preferences(float minAreaRatio,
                                   float nearAreaRatio,
-                                  float maxPersonOcclusion) {
+                                  float maxPersonOcclusion,
+                                  bool requireApproach) {
     std::lock_guard<std::mutex> lock(tracks_mutex);
     g_capture_min_area_ratio = std::max(0.001f, minAreaRatio);
     g_capture_near_area_ratio = std::max(g_capture_min_area_ratio, nearAreaRatio);
     g_capture_max_person_occlusion = std::max(0.05f, maxPersonOcclusion);
+    g_capture_require_approach = requireApproach;
 }
 
 static bool is_track_person_captured(int track_id) {
@@ -878,6 +1132,8 @@ static void correct_track_robust(Track& t, const Detection& det) {
     }
 
     append_area_history(t.bbox_history, t.bbox.area());
+    append_track_trajectory_sample(t, t.bbox);
+    update_track_trajectory_state(t);
 }
 
 static Track create_track(const Detection& det, int id, bool already_captured) {
@@ -903,9 +1159,13 @@ static Track create_track(const Detection& det, int id, bool already_captured) {
     append_area_history(t.bbox_history, t.bbox.area());
     t.bbox_jitter = 0.0f;
     t.is_approaching = false;
-    t.best_area = 0.0f;
+    t.trajectory_direction = TrackTrajectoryDirection::Unknown;
+    t.trajectory_score = 0.0f;
+    t.max_area_ratio = 0.0f;
     t.best_clarity = 0.0;
     t.has_captured = already_captured;
+    append_track_trajectory_sample(t, t.bbox);
+    update_track_trajectory_state(t);
     return t;
 }
 
@@ -1022,6 +1282,28 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             return;
         }
 
+        TrackTrajectoryDecision trajectory_decision;
+        const char* trajectory_reason = nullptr;
+        if (!should_upload_track_by_trajectory(t, &trajectory_decision, &trajectory_reason)) {
+            log_info("Track %d skipped upload on loss: reason=%s dir=%s score=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f peak=%.4f max_area=%.4f",
+                     t.id,
+                     trajectory_reason ? trajectory_reason : "trajectory_reject",
+                     track_trajectory_direction_to_string(trajectory_decision.direction),
+                     trajectory_decision.score,
+                     trajectory_decision.approach_peak_score,
+                     trajectory_decision.return_score,
+                     trajectory_decision.reversed_after_approach ? 1 : 0,
+                     trajectory_decision.samples,
+                     trajectory_decision.bottom_start,
+                     trajectory_decision.bottom_end,
+                     trajectory_decision.peak_bottom,
+                     trajectory_decision.area_start,
+                     trajectory_decision.area_end,
+                     trajectory_decision.peak_area,
+                     t.max_area_ratio);
+            return;
+        }
+
         pendingUploads.push_back(std::move(pending));
         if (pendingUploads.back().uploadPerson) {
             captured_person_ids->insert(t.id);
@@ -1068,7 +1350,9 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         lock.unlock();
         for (const auto& upload : pendingUploads) {
             if (upload.uploadPerson && !upload.personFrame.person_roi.empty()) {
-                upload_callback(upload.personFrame.person_roi, upload.trackId, "person");
+                upload_callback(upload.personFrame.person_roi,
+                                upload.trackId,
+                                upload.uploadFace ? "person" : "person_only");
             }
             if (upload.uploadFace && !upload.faceFrame.face_roi.empty()) {
                 upload_callback(upload.faceFrame.face_roi, upload.trackId, "face");
@@ -1232,7 +1516,9 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
     lock.unlock();
     for (const auto& upload : pendingUploads) {
         if (upload.uploadPerson && !upload.personFrame.person_roi.empty()) {
-            upload_callback(upload.personFrame.person_roi, upload.trackId, "person");
+            upload_callback(upload.personFrame.person_roi,
+                            upload.trackId,
+                            upload.uploadFace ? "person" : "person_only");
         }
         if (upload.uploadFace && !upload.faceFrame.face_roi.empty()) {
             upload_callback(upload.faceFrame.face_roi, upload.trackId, "face");

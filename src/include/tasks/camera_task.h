@@ -54,16 +54,6 @@ private:
         float motionRatio;
     };
 
-    struct TrackApproachState {
-        bool isApproaching{false};
-        int positiveHits{0};
-        int negativeHits{0};
-        float lastTrend{0.0f};
-        float lastJitter{0.0f};
-        float lastAreaRatio{0.0f};
-        size_t lastHistorySize{0};
-    };
-
     void run();
     void captureLoop();
     void candidateEvalLoop(rknn_context faceCtx);
@@ -123,7 +113,6 @@ private:
 
     std::unordered_map<int, cv::Point2f> lastTrackCenters;
     std::unordered_map<int, std::deque<cv::Mat>> trackPersonRoiHistory;
-    std::unordered_map<int, TrackApproachState> trackApproachStates;
     size_t candidateRoundRobinOffset{0};
 
     std::unordered_set<int> reportedPersonIds;

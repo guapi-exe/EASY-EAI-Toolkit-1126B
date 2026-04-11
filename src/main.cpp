@@ -105,13 +105,20 @@ int main(int argc, char** argv) {
         }
 
         std::string uniqueCode;
-        if ((type == "person" || type == "face") && id > 0) {
+        if ((type == "person" || type == "person_only" || type == "face") && id > 0) {
             auto it = groupedUniqueCode.find(id);
             if (it == groupedUniqueCode.end()) {
                 uniqueCode = generateUniqueCode12();
                 groupedUniqueCode[id] = uniqueCode;
             } else {
                 uniqueCode = it->second;
+            }
+
+            if (type == "person_only") {
+                uploader.enqueue(img, config.cameraNumber, "person", targetPath, uniqueCode);
+                pendingPersonById.erase(id);
+                groupedUniqueCode.erase(id);
+                return;
             }
 
             if (type == "person") {

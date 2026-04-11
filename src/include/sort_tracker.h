@@ -19,6 +19,12 @@ struct Detection {
     float prop;
 };
 
+enum class TrackTrajectoryDirection : uint8_t {
+    Unknown = 0,
+    Approaching = 1,
+    Leaving = 2,
+};
+
 struct Track {
     int id;
     ekf_t ekf;
@@ -33,9 +39,12 @@ struct Track {
     bool active;
     bool confirmed;
     std::vector<float> bbox_history;
+    std::vector<cv::Point2f> trajectory_history;
     float bbox_jitter;
     bool is_approaching;
-    float best_area;
+    TrackTrajectoryDirection trajectory_direction;
+    float trajectory_score;
+    float max_area_ratio;
     double best_clarity;
     bool has_captured;
 
@@ -68,7 +77,8 @@ void set_upload_callback(std::function<void(const cv::Mat&, int, const std::stri
 void set_max_frame_candidates(size_t maxFrameCandidates);
 void set_capture_sort_preferences(float minAreaRatio,
                                   float nearAreaRatio,
-                                  float maxPersonOcclusion);
+                                  float maxPersonOcclusion,
+                                  bool requireApproach);
 void add_frame_candidate(int track_id, const Track::FrameData& frame_data);
 
 #endif
