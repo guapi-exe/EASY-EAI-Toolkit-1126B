@@ -48,7 +48,7 @@ static constexpr int LOST_TRACK_TTL = 35;
 static constexpr int RECENT_CAPTURE_TTL = 75;
 static constexpr int PENDING_TRACK_TTL = 4;
 static constexpr int PENDING_TRACK_HITS_REQUIRED = 2;
-static constexpr size_t BBOX_HISTORY_LIMIT = 20;
+static constexpr size_t BBOX_HISTORY_LIMIT = 40;
 static constexpr float TRACK_SMOOTH_CENTER_ALPHA = 0.30f;
 static constexpr float TRACK_SMOOTH_SIZE_ALPHA = 0.16f;
 static constexpr float TRACK_RECOVER_CENTER_ALPHA = 0.48f;
@@ -60,12 +60,12 @@ static float g_capture_min_area_ratio = CAPTURE_MIN_AREA_RATIO;
 static float g_capture_near_area_ratio = CAPTURE_NEAR_AREA_RATIO;
 static float g_capture_max_person_occlusion = CAPTURE_MAX_PERSON_OCCLUSION;
 static bool g_capture_require_approach = CAPTURE_REQUIRE_APPROACH != 0;
-static constexpr size_t TRAJECTORY_HISTORY_LIMIT = 24;
-static constexpr size_t TRAJECTORY_EVAL_SAMPLES = 8;
-static constexpr float TRAJECTORY_MIN_BOTTOM_TRAVEL = 0.020f;
-static constexpr float TRAJECTORY_MIN_AREA_TRAVEL = 0.010f;
-static constexpr float TRAJECTORY_SCORE_THRESHOLD = 0.12f;
-static constexpr float TRAJECTORY_RETURN_SCORE_THRESHOLD = 0.10f;
+static constexpr size_t TRAJECTORY_HISTORY_LIMIT = 40; //ofc is 24
+static constexpr size_t TRAJECTORY_EVAL_SAMPLES = 12; //oficial is 8
+static constexpr float TRAJECTORY_MIN_BOTTOM_TRAVEL = 0.015f;
+static constexpr float TRAJECTORY_MIN_AREA_TRAVEL = 0.008f;
+static constexpr float TRAJECTORY_SCORE_THRESHOLD = 0.08f;
+static constexpr float TRAJECTORY_RETURN_SCORE_THRESHOLD = 0.06f;
 
 struct TrackTrajectoryDecision {
     TrackTrajectoryDirection direction{TrackTrajectoryDirection::Unknown};
@@ -171,7 +171,7 @@ static float compute_trajectory_delta_score(float bottom_from,
                                             float area_to) {
     float area_delta_ratio = (area_to - area_from) / std::max(area_from, 1e-4f);
     float bottom_component = (bottom_to - bottom_from) * 2.4f;
-    float area_component = std::tanh(area_delta_ratio * 0.85f);
+    float area_component = std::tanh(area_delta_ratio * 0.92f);
     return bottom_component * 0.68f + area_component * 0.32f;
 }
 
@@ -285,9 +285,10 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
     }
 
     decision.reliable =
-        bottom_consistency >= 0.42f ||
-        area_consistency >= 0.52f ||
-        std::fabs(area_delta_ratio) >= 0.55f;
+        bottom_consistency >= 0.35f ||
+        area_consistency >= 0.45f ||
+        std::fabs(area_delta_ratio) >= 0.45f ||
+        std::fabs(decision.score) >= 0.2f; // 如果score绝对值较大，也认为可靠
 
     bool peak_before_end = decision.peak_index >= edge_window &&
                            decision.peak_index < static_cast<int>(recent_count - edge_window);
@@ -298,10 +299,7 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
         decision.reversed_after_approach = true;
     }
 
-    if (!decision.reliable) {
-        return decision;
-    }
-
+    // 即使可靠性不高，只要score绝对值足够大，也设置方向
     if (decision.score >= TRAJECTORY_SCORE_THRESHOLD) {
         decision.direction = TrackTrajectoryDirection::Approaching;
     } else if (decision.score <= -TRAJECTORY_SCORE_THRESHOLD) {
@@ -316,6 +314,22 @@ static void update_track_trajectory_state(Track& t) {
     t.trajectory_direction = decision.direction;
     t.trajectory_score = decision.score;
     t.is_approaching = decision.direction == TrackTrajectoryDirection::Approaching;
+    t.has_reversed = decision.reversed_after_approach;
+    t.peak_bottom = decision.peak_bottom;
+    t.peak_area = decision.peak_area;
+    
+    // Log trajectory direction analysis
+    if (decision.samples >= 5) {
+        const char* direction_str = track_trajectory_direction_to_string(decision.direction);
+        log_debug("Track %d trajectory analysis: direction=%s score=%.3f bottom=%.3f->%.3f area=%.4f->%.4f",
+                 t.id,
+                 direction_str,
+                 decision.score,
+                 decision.bottom_start,
+                 decision.bottom_end,
+                 decision.area_start,
+                 decision.area_end);
+    }
 }
 
 static bool should_upload_track_by_trajectory(const Track& t,
@@ -326,43 +340,79 @@ static bool should_upload_track_by_trajectory(const Track& t,
         *out_decision = decision;
     }
 
-    if (!g_capture_require_approach) {
+    // 计算当前底部位置（相对于画面高度的比例）
+    float bottom_position;
+    if (!t.trajectory_history.empty()) {
+        // 使用轨迹历史的最后一个样本的底部位置
+        bottom_position = t.trajectory_history.back().y / static_cast<float>(IMAGE_HEIGHT);
+    } else {
+        // 如果没有轨迹历史，使用当前边界框的底部位置
+        bottom_position = (t.bbox.y + t.bbox.height) / static_cast<float>(IMAGE_HEIGHT);
+    }
+    
+    // 检查边界框大小变化，当人员离开画面时，边界框会明显减小
+    float size_ratio = 1.0f;
+    float current_area = 0.0f;
+    float max_area = 0.0f;
+    if (t.frame_candidates.size() >= 2) {
+        const auto& first_frame = t.frame_candidates[0];
+        const auto& last_frame = t.frame_candidates.back();
+        size_ratio = last_frame.area_ratio / first_frame.area_ratio;
+        current_area = last_frame.area_ratio;
+        max_area = t.max_area_ratio;
+    }
+    
+    // 当边界框明显减小（小于原来的一半），且人员之前已经接近画面底部，也认为人员已经离开
+    bool significantly_smaller = size_ratio < 0.5f;
+    bool was_near_bottom = t.trajectory_history.size() > 0 && 
+        t.trajectory_history.back().y / static_cast<float>(IMAGE_HEIGHT) > 0.8f;
+
+    // 检查轨迹历史的底部位置变化趋势
+    bool bottom_decreasing = false;
+    if (t.trajectory_history.size() >= 5) { // 增加轨迹长度检查，确保有足够的数据
+        float recent_bottom = t.trajectory_history.back().y / static_cast<float>(IMAGE_HEIGHT);
+        float previous_bottom = t.trajectory_history[t.trajectory_history.size() - 2].y / static_cast<float>(IMAGE_HEIGHT);
+        float earlier_bottom = t.trajectory_history[t.trajectory_history.size() - 3].y / static_cast<float>(IMAGE_HEIGHT);
+        // 增加底部位置的绝对值检查，只有当底部位置减小到一定程度时才认为人员从画面底部消失
+        bottom_decreasing = (recent_bottom < previous_bottom) && (previous_bottom < earlier_bottom) && (recent_bottom < 0.5f);
+    }
+
+    // 检查当前面积是否比最大面积明显减小，表明人员正在离开画面
+    // 对于楼梯场景，当人员接近摄像头后突然消失，面积可能不会明显减小，因此降低阈值
+    bool area_shrinking = max_area > 0.0f && current_area > 0.0f && 
+                          current_area < max_area * 0.7f && // 从0.5f改为0.7f，降低面积减少的要求
+                          decision.peak_bottom >= 0.75f && 
+                          t.trajectory_history.size() >= 3; // 从5改为3，降低轨迹长度要求
+
+    // 对于上下楼梯的应用场景，只有当人员从画面下侧出去后才上传
+    // 这是最重要的条件，确保人员真正经过摄像头
+    if (bottom_position < 0.35f || (significantly_smaller && was_near_bottom) || 
+        (bottom_decreasing && was_near_bottom) || area_shrinking) { // 底部位置低于画面35%，或边界框明显减小且之前接近画面底部，或底部位置持续减小且之前接近画面底部，或面积明显减小且之前接近画面底部，表示从画面底部消失
         if (reason) {
-            *reason = "approach_gate_disabled";
+            *reason = "trajectory_left_bottom";
+        }
+        return true;
+    }
+    
+    // 对于楼梯场景，当人员接近摄像头后突然消失（轨迹丢失）时也应该上传
+    // 这种情况是由于人员经过摄像头后快速离开画面导致的
+    // 对于楼梯扶手的摄像头安装方式，人员经过摄像头后会突然消失，可能不会有明显的"离开"动作
+    // 关键是：只要人员真正接近过摄像头（peak_bottom >= 0.75f），并且没有掉头返回，就可以上传
+    bool did_not_reverse = !decision.reversed_after_approach; // 没有掉头返回
+    bool was_approaching = decision.direction == TrackTrajectoryDirection::Approaching || // 方向是接近
+                           decision.approach_peak_score >= 0.06f; // 或者有明显的接近趋势
+    bool started_at_bottom = decision.peak_bottom >= 0.75f; // 从0.80f改为0.75f，降低阈值
+    bool area_decreasing = decision.area_end < decision.area_start * 0.90f; // 从0.85f改为0.90f，降低面积减少的要求
+    if ((t.missed > 1 && decision.peak_index >= 0 && decision.peak_bottom >= 0.75f && did_not_reverse && was_approaching) || (t.missed > 1 && started_at_bottom && area_decreasing && did_not_reverse)) {
+        if (reason) {
+            *reason = "trajectory_lost_after_reaching_bottom";
         }
         return true;
     }
 
-    if (decision.reversed_after_approach) {
-        if (reason) {
-            *reason = "trajectory_uturn_return";
-        }
-        return false;
-    }
-
-    if (decision.direction == TrackTrajectoryDirection::Leaving) {
-        if (reason) {
-            *reason = "trajectory_leaving";
-        }
-        return false;
-    }
-
-    if (decision.direction == TrackTrajectoryDirection::Approaching) {
-        if (reason) {
-            *reason = "trajectory_approaching";
-        }
-        return true;
-    }
-
-    if (t.max_area_ratio >= g_capture_near_area_ratio) {
-        if (reason) {
-            *reason = "trajectory_unknown_but_near";
-        }
-        return true;
-    }
-
+    // 其他情况都不应该上传，确保只有真正从画面底部消失的人员才会被上传
     if (reason) {
-        *reason = "trajectory_unknown";
+        *reason = "not_left_bottom";
     }
     return false;
 }
@@ -644,8 +694,8 @@ static double face_capture_priority(const Track::FrameData& frame) {
     float pose_bonus = frame.face_pose_level >= 2 ? 150.0f : 82.0f;
     float strong_bonus = frame.strong_candidate ? 95.0f : 0.0f;
     float clarity_bonus = static_cast<float>(frame.clarity * 0.46);
-    float near_bonus = std::min(1.8f, near_ratio) * 180.0f;
-    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 240.0f : 0.0f;
+    float near_bonus = std::min(2.5f, near_ratio) * 280.0f;
+    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 380.0f : 0.0f;
     float blur_penalty = frame.blur_severity * 95.0f;
     float motion_penalty = frame.motion_ratio * 24000.0f;
     float occ_penalty = frame.person_occlusion * 120.0f + frame.face_edge_occlusion * 150.0f;
@@ -657,8 +707,8 @@ static double face_capture_priority(const Track::FrameData& frame) {
 
 static double person_capture_priority(const Track::FrameData& frame) {
     float near_ratio = near_ratio_score(frame);
-    float near_bonus = std::min(1.8f, near_ratio) * 220.0f;
-    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 300.0f : 0.0f;
+    float near_bonus = std::min(2.5f, near_ratio) * 320.0f;
+    float far_penalty = near_ratio < 1.0f ? (1.0f - near_ratio) * 450.0f : 0.0f;
     float clarity_bonus = static_cast<float>(frame.clarity * 0.34);
     float blur_penalty = frame.blur_severity * 88.0f;
     float motion_penalty = frame.motion_ratio * 20000.0f;
@@ -1053,12 +1103,12 @@ static void predict_track_robust(Track& t) {
     };
 
     _float_t Q[EKF_N * EKF_N] = {0};
-    Q[0 * EKF_N + 0] = 1.0f;
-    Q[1 * EKF_N + 1] = 1.0f;
+    Q[0 * EKF_N + 0] = 1.5f; //ofc is 1.0
+    Q[1 * EKF_N + 1] = 1.5f; //ofc is 1.0
     Q[2 * EKF_N + 2] = 0.5f;
     Q[3 * EKF_N + 3] = 0.5f;
-    Q[4 * EKF_N + 4] = 0.1f;
-    Q[5 * EKF_N + 5] = 0.1f;
+    Q[4 * EKF_N + 4] = 0.15f; //ofc is 0.1
+    Q[5 * EKF_N + 5] = 0.15f; //ofc is 0.1
     Q[6 * EKF_N + 6] = 0.05f;
     Q[7 * EKF_N + 7] = 0.05f;
 
@@ -1164,6 +1214,9 @@ static Track create_track(const Detection& det, int id, bool already_captured) {
     t.max_area_ratio = 0.0f;
     t.best_clarity = 0.0;
     t.has_captured = already_captured;
+    t.has_reversed = false;
+    t.peak_bottom = 0.0f;
+    t.peak_area = 0.0f;
     append_track_trajectory_sample(t, t.bbox);
     update_track_trajectory_state(t);
     return t;
@@ -1285,7 +1338,7 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
         TrackTrajectoryDecision trajectory_decision;
         const char* trajectory_reason = nullptr;
         if (!should_upload_track_by_trajectory(t, &trajectory_decision, &trajectory_reason)) {
-            log_info("Track %d skipped upload on loss: reason=%s dir=%s score=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f peak=%.4f max_area=%.4f",
+            log_info("---Track %d skipped upload on loss: reason=%s dir=%s score=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f peak=%.4f max_area=%.4f",
                      t.id,
                      trajectory_reason ? trajectory_reason : "trajectory_reject",
                      track_trajectory_direction_to_string(trajectory_decision.direction),
@@ -1446,15 +1499,15 @@ std::vector<Track> sort_update(const std::vector<Detection>& dets) {
             // far from this detection, penalize the match (prevents ID swaps).
             if (tracks[i].confirmed) {
                 float pred_dist = center_distance_norm(predicted_bboxes[i], det_rect);
-                if (pred_dist > 0.15f) {
-                    cost[i][j] += 0.15f;
+                if (pred_dist > 0.18f) { //ofc is 0.15
+                    cost[i][j] += 0.12f; //ofc is 0.15
                 }
             }
         }
     }
 
     // max_cost tightened to reject weak matches that cause ID swaps.
-    std::vector<std::pair<int,int>> assignments = hungarian_algorithm(cost, 0.65f);
+    std::vector<std::pair<int,int>> assignments = hungarian_algorithm(cost, 0.70f); //ofic is 0.65f
     
     std::vector<bool> track_assigned(N, false);
     std::vector<bool> det_assigned(M, false);
