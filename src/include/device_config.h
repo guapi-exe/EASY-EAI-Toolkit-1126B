@@ -85,7 +85,7 @@ struct DeviceConfig {
 
     std::string deviceCode = "00000001";
     int cameraNumber = DEFAULT_CAMERA_NUMBER;
-    std::string uploadServer = "http://101.200.56.225:11100";
+    std::string uploadServer = "http://117.132.4.39:81/receiveApi";
     std::string uploadImagePath = "/receive/image/auto/minio";
     std::string uploadManualImagePath = "/receive/image/manual";
     std::string tcpServerIp = "192.168.1.1";
