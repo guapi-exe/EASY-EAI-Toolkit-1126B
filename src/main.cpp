@@ -75,26 +75,6 @@ int main(int argc, char** argv) {
                  IMAGE_HEIGHT);
     }
 
-    {
-        bool uploadConfigChanged = false;
-        if (config.uploadServer == "http://101.200.56.225:11100" ||
-            config.uploadServer == "http://117.132.4.39:81/receiveApi") {
-            config.uploadServer = "http://117.132.4.39:81";
-            uploadConfigChanged = true;
-        }
-        if (config.uploadImagePath == "/receive/image/auto" ||
-            config.uploadImagePath == "/receive/image/auto/minio") {
-            config.uploadImagePath = "/receiveApi";
-            uploadConfigChanged = true;
-        }
-        if (config.uploadManualImagePath == "/receive/image/manual") {
-            config.uploadManualImagePath = "/receiveApi";
-            uploadConfigChanged = true;
-        }
-        if (uploadConfigChanged) {
-            config.save(configPath);
-        }
-    }
     log_info("Upload config: mode=%s server=%s image_path=%s manual_path=%s",
              debugMode ? "debug" : "normal",
              config.uploadServer.c_str(),
