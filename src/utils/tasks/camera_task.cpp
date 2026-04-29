@@ -345,7 +345,7 @@ bool isValidTrackRect(const cv::Rect2f& rect) {
     return rect.width > 1.0f && rect.height > 1.0f;
 }
 
-cv::Rect2f selectTrackRect720p(const Track& track) {
+cv::Rect2f selectTrackRect720p(const TrackSnapshot& track) {
     return isValidTrackRect(track.smoothed_bbox) ? track.smoothed_bbox : track.bbox;
 }
 
@@ -952,7 +952,7 @@ void CameraTask::stopRtspStreamTask() {
     }
 }
 
-void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Track>& tracks) {
+void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<TrackSnapshot>& tracks) {
     bool shouldPublish = false;
     {
         std::lock_guard<std::mutex> lock(rtspStreamMutex);
@@ -979,13 +979,10 @@ void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Tr
         overlay.id = track.id;
         overlay.bbox = box;
         overlay.personConfidence = track.prop;
-        for (auto it = track.frame_candidates.rbegin(); it != track.frame_candidates.rend(); ++it) {
-            if (it->has_face && it->face_bbox_720p.width > 0 && it->face_bbox_720p.height > 0) {
-                overlay.hasFaceBox = true;
-                overlay.faceBox = it->face_bbox_720p;
-                overlay.faceConfidence = it->face_confidence;
-                break;
-            }
+        if (track.has_face) {
+            overlay.hasFaceBox = true;
+            overlay.faceBox = track.face_bbox_720p;
+            overlay.faceConfidence = track.face_confidence;
         }
         overlay.confirmed = track.confirmed;
         overlay.approaching = track.is_approaching;
@@ -1857,7 +1854,7 @@ void CameraTask::captureSnapshot() {
 
 void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     static int personDetectCounter = 0;
-    static std::vector<Track> cachedTracks;
+    static std::vector<TrackSnapshot> cachedTracks;
     DeviceConfig::CaptureDefaults config = getCaptureConfigSnapshot();
     AdaptiveCaptureThresholds adaptiveThresholds =
         buildAdaptiveCaptureThresholds(config,
@@ -1916,24 +1913,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         for (int i = 0; i < detect_result_group.count; i++) {
             detect_result_t& d = detect_result_group.results[i];
 
-            // Confidence hysteresis: lower threshold for detections near existing tracks.
-            float confThreshold = 0.7f;
-            if (d.prop >= 0.5f && d.prop < 0.7f && !cachedTracks.empty()) {
-                cv::Rect det_rect(max(0, d.box.left), max(0, d.box.top),
-                                  min(IMAGE_WIDTH - 1, d.box.right) - max(0, d.box.left),
-                                  min(IMAGE_HEIGHT - 1, d.box.bottom) - max(0, d.box.top));
-                for (const auto& tr : cachedTracks) {
-                    if (tr.confirmed) {
-                        cv::Rect tr_rect((int)tr.smoothed_bbox.x, (int)tr.smoothed_bbox.y,
-                                         (int)tr.smoothed_bbox.width, (int)tr.smoothed_bbox.height);
-                        if (rect_iou(det_rect, tr_rect) > 0.3f) {
-                            confThreshold = 0.5f;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (d.prop < confThreshold) continue;
+            const float kHighTrackConfidence = 0.70f;
+            const float kLowTrackConfidence = 0.35f;
+            if (d.prop < kLowTrackConfidence) continue;
 
             Rect roi_720p(max(0, d.box.left), max(0, d.box.top),
                           min(IMAGE_WIDTH - 1, d.box.right) - max(0, d.box.left),
@@ -1947,6 +1929,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             det.x2 = roi_720p.x + roi_720p.width;
             det.y2 = roi_720p.y + roi_720p.height;
             det.prop = d.prop;
+            det.allow_new_track = d.prop >= kHighTrackConfidence;
             dets.push_back(det);
         }
 
@@ -1957,7 +1940,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         cachedTracks = sort_predict_only();
     }
 
-    const vector<Track>& tracks = cachedTracks;
+    const vector<TrackSnapshot>& tracks = cachedTracks;
     publishRtspFrame(resized_frame, tracks);
     std::unordered_set<int> activeTrackIds;
 

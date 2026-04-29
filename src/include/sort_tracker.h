@@ -17,6 +17,7 @@ struct Detection {
     float x1, y1, x2, y2;
     cv::Mat roi;
     float prop;
+    bool allow_new_track{true};
 };
 
 enum class TrackTrajectoryDirection : uint8_t {
@@ -73,10 +74,33 @@ struct Track {
     std::vector<FrameData> frame_candidates;
 };
 
+struct TrackSnapshot {
+    int id{0};
+    cv::Rect2f bbox;
+    cv::Rect2f smoothed_bbox;
+    float prop{0.0f};
+    int missed{0};
+    int hits{0};
+    bool confirmed{false};
+    float bbox_jitter{0.0f};
+    bool is_approaching{false};
+    TrackTrajectoryDirection trajectory_direction{TrackTrajectoryDirection::Unknown};
+    float trajectory_score{0.0f};
+    float max_area_ratio{0.0f};
+    bool has_reversed{false};
+    float peak_bottom{0.0f};
+    float peak_area{0.0f};
+    bool has_captured{false};
+    bool has_face{false};
+    cv::Rect face_bbox_720p;
+    float face_confidence{0.0f};
+    std::vector<cv::Point2f> trajectory_history;
+};
+
 void sort_init();
-std::vector<Track> sort_update(const std::vector<Detection>& dets);
-std::vector<Track> sort_predict_only();
-std::vector<Track> get_expiring_tracks();
+std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets);
+std::vector<TrackSnapshot> sort_predict_only();
+std::vector<TrackSnapshot> get_expiring_tracks();
 void set_upload_callback(std::function<void(const cv::Mat&, int, const std::string&)> callback,
                          std::unordered_set<int>* person_ids,
                          std::unordered_set<int>* face_ids);

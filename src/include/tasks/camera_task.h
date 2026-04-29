@@ -75,7 +75,7 @@ private:
     void processFrame(const cv::Mat& frame, rknn_context personCtx);
     void startRtspStreamIfEnabled();
     void stopRtspStreamTask();
-    void publishRtspFrame(const cv::Mat& frame720p, const std::vector<Track>& tracks);
+    void publishRtspFrame(const cv::Mat& frame720p, const std::vector<TrackSnapshot>& tracks);
     void updateFPS();
     DeviceConfig::CaptureDefaults getCaptureConfigSnapshot() const;
     DeviceConfig::BrightnessBoostConfig getBrightnessBoostConfigSnapshot() const;
