@@ -59,7 +59,6 @@ static constexpr float TRACK_BBOX_JITTER_ALPHA = 0.28f;
 static float g_capture_min_area_ratio = CAPTURE_MIN_AREA_RATIO;
 static float g_capture_near_area_ratio = CAPTURE_NEAR_AREA_RATIO;
 static float g_capture_max_person_occlusion = CAPTURE_MAX_PERSON_OCCLUSION;
-static bool g_capture_require_approach = CAPTURE_REQUIRE_APPROACH != 0;
 static constexpr size_t TRAJECTORY_EDGE_WINDOW_MAX = 12;
 static constexpr float TRAJECTORY_MIN_BOTTOM_TRAVEL = 0.015f;
 static constexpr float TRAJECTORY_MIN_AREA_TRAVEL = 0.008f;
@@ -298,6 +297,32 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
                                                           decision.final_area_start,
                                                           decision.final_area_end);
 
+    if (eval_count >= 8) {
+        size_t short_window = std::min<size_t>(6, std::max<size_t>(2, eval_count / 10));
+        size_t short_end = eval_count;
+        size_t short_mid = short_end - short_window;
+        size_t short_start = short_mid >= short_window ? short_mid - short_window : 0;
+        float short_bottom_start = mean_range(bottom_history, short_start, short_mid);
+        float short_bottom_end = mean_range(bottom_history, short_mid, short_end);
+        float short_area_start = mean_range(area_history, short_start, short_mid);
+        float short_area_end = mean_range(area_history, short_mid, short_end);
+        float short_score = compute_trajectory_delta_score(short_bottom_start,
+                                                           short_bottom_end,
+                                                           short_area_start,
+                                                           short_area_end);
+        bool short_leaving = short_score <= -TRAJECTORY_FINAL_SCORE_THRESHOLD;
+        bool short_approaching =
+            short_score >= TRAJECTORY_FINAL_SCORE_THRESHOLD &&
+            decision.final_score > -TRAJECTORY_FINAL_SCORE_THRESHOLD * 0.55f;
+        if (short_leaving || short_approaching) {
+            decision.final_bottom_start = short_bottom_start;
+            decision.final_bottom_end = short_bottom_end;
+            decision.final_area_start = short_area_start;
+            decision.final_area_end = short_area_end;
+            decision.final_score = short_score;
+        }
+    }
+
     float bottom_signed = 0.0f;
     float area_signed = 0.0f;
     for (size_t i = 1; i < eval_count; ++i) {
@@ -492,7 +517,7 @@ void set_capture_sort_preferences(float minAreaRatio,
     g_capture_min_area_ratio = std::max(0.001f, minAreaRatio);
     g_capture_near_area_ratio = std::max(g_capture_min_area_ratio, nearAreaRatio);
     g_capture_max_person_occlusion = std::max(0.05f, maxPersonOcclusion);
-    g_capture_require_approach = requireApproach;
+    (void)requireApproach;
 }
 
 static bool is_track_person_captured(int track_id) {
@@ -1304,8 +1329,23 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
     age_pending_tracks();
 
     auto queue_upload_if_needed = [&](const Track& t) {
-        if (!upload_callback || t.frame_candidates.empty() || !captured_person_ids || !captured_face_ids) {
-            log_debug("Track %d upload conditions not met", t.id);
+        if (!upload_callback || !captured_person_ids || !captured_face_ids) {
+            log_warn("Track %d skipped upload: upload callback/state not ready", t.id);
+            if (has_track_uploaded_asset(t.id)) {
+                remember_recent_capture(t);
+            }
+            return;
+        }
+
+        if (t.frame_candidates.empty()) {
+            TrackTrajectoryDecision decision = evaluate_track_trajectory(t);
+            log_info("Track %d skipped upload: no candidate frame stored, dir=%s final=%.3f samples=%d area_peak=%.4f max_area=%.4f",
+                     t.id,
+                     track_trajectory_direction_to_string(decision.direction),
+                     decision.final_score,
+                     decision.samples,
+                     decision.peak_area,
+                     t.max_area_ratio);
             if (has_track_uploaded_asset(t.id)) {
                 remember_recent_capture(t);
             }
@@ -1322,6 +1362,33 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
         size_t best_person_index = select_best_person_frame_index(t.frame_candidates);
         if (best_face_index == SIZE_MAX && best_person_index == SIZE_MAX) {
             log_debug("Track %d skipped upload: no usable candidate", t.id);
+            return;
+        }
+
+        TrackTrajectoryDecision trajectory_decision;
+        const char* trajectory_reason = nullptr;
+        if (!should_upload_track_by_trajectory(t, &trajectory_decision, &trajectory_reason)) {
+            log_info("---Track %d skipped upload on loss: reason=%s dir=%s score=%.3f final=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f final_bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f final_area=%.4f->%.4f peak=%.4f max_area=%.4f",
+                     t.id,
+                     trajectory_reason ? trajectory_reason : "trajectory_reject",
+                     track_trajectory_direction_to_string(trajectory_decision.direction),
+                     trajectory_decision.score,
+                     trajectory_decision.final_score,
+                     trajectory_decision.approach_peak_score,
+                     trajectory_decision.return_score,
+                     trajectory_decision.reversed_after_approach ? 1 : 0,
+                     trajectory_decision.samples,
+                     trajectory_decision.bottom_start,
+                     trajectory_decision.bottom_end,
+                     trajectory_decision.final_bottom_start,
+                     trajectory_decision.final_bottom_end,
+                     trajectory_decision.peak_bottom,
+                     trajectory_decision.area_start,
+                     trajectory_decision.area_end,
+                     trajectory_decision.final_area_start,
+                     trajectory_decision.final_area_end,
+                     trajectory_decision.peak_area,
+                     t.max_area_ratio);
             return;
         }
 
@@ -1382,6 +1449,19 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
             }
         }
 
+        if (!pending.uploadPerson && !pending.uploadFace &&
+            !is_track_person_captured(t.id) && best_person_index != SIZE_MAX) {
+            const auto& final_trend_person = t.frame_candidates[best_person_index];
+            pending.uploadPerson = true;
+            pending.personFrame = final_trend_person;
+            log_info("Track %d final-trend person-only upload: area=%.4f occ=%.2f clarity=%.1f final=%.3f",
+                     t.id,
+                     final_trend_person.area_ratio,
+                     final_trend_person.person_occlusion,
+                     final_trend_person.clarity,
+                     trajectory_decision.final_score);
+        }
+
         if (!pending.uploadPerson && !pending.uploadFace) {
             float best_area_ratio = 0.0f;
             if (best_face_index != SIZE_MAX) {
@@ -1393,33 +1473,6 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
             log_debug("Track %d skipped upload: target still too far or too occluded (best_area=%.4f)",
                       t.id,
                       best_area_ratio);
-            return;
-        }
-
-        TrackTrajectoryDecision trajectory_decision;
-        const char* trajectory_reason = nullptr;
-        if (!should_upload_track_by_trajectory(t, &trajectory_decision, &trajectory_reason)) {
-            log_info("---Track %d skipped upload on loss: reason=%s dir=%s score=%.3f final=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f final_bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f final_area=%.4f->%.4f peak=%.4f max_area=%.4f",
-                     t.id,
-                     trajectory_reason ? trajectory_reason : "trajectory_reject",
-                     track_trajectory_direction_to_string(trajectory_decision.direction),
-                     trajectory_decision.score,
-                     trajectory_decision.final_score,
-                     trajectory_decision.approach_peak_score,
-                     trajectory_decision.return_score,
-                     trajectory_decision.reversed_after_approach ? 1 : 0,
-                     trajectory_decision.samples,
-                     trajectory_decision.bottom_start,
-                     trajectory_decision.bottom_end,
-                     trajectory_decision.final_bottom_start,
-                     trajectory_decision.final_bottom_end,
-                     trajectory_decision.peak_bottom,
-                     trajectory_decision.area_start,
-                     trajectory_decision.area_end,
-                     trajectory_decision.final_area_start,
-                     trajectory_decision.final_area_end,
-                     trajectory_decision.peak_area,
-                     t.max_area_ratio);
             return;
         }
 

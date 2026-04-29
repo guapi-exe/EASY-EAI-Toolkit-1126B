@@ -2128,6 +2128,33 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             person_occlusion = occ_it->second;
         }
 
+        float person_only_area_threshold =
+            std::max(config.minAreaRatio, config.nearAreaRatio * 0.55f);
+        bool store_person_only_fallback =
+            area_ratio >= person_only_area_threshold &&
+            (near_ok || t.is_approaching ||
+             ((totalFrames.load() + t.id) % 3 == 0));
+        if (store_person_only_fallback) {
+            Track::FrameData frame_data{};
+            frame_data.score =
+                std::min(2.0f, area_ratio / std::max(1e-6f, config.nearAreaRatio)) * 160.0f -
+                person_occlusion * 120.0f -
+                motion_ratio * 6000.0f;
+            frame_data.person_roi = person_roi.clone();
+            frame_data.has_face = false;
+            frame_data.is_frontal = false;
+            frame_data.face_pose_level = 0;
+            frame_data.strong_candidate = false;
+            frame_data.yaw_abs = 1.0f;
+            frame_data.clarity = 0.0;
+            frame_data.area_ratio = area_ratio;
+            frame_data.person_occlusion = person_occlusion;
+            frame_data.face_edge_occlusion = 0.0f;
+            frame_data.motion_ratio = motion_ratio;
+            frame_data.blur_severity = 0.0f;
+            add_frame_candidate(t.id, frame_data);
+        }
+
         CandidateEvalJob job;
         job.trackId = t.id;
         job.personRoi = person_roi.clone();
