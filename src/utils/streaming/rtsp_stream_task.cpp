@@ -134,8 +134,10 @@ void RtspStreamTask::run() {
                 continue;
             }
 
-            frame = latestFrame.clone();
-            tracks = latestTracks;
+            frame = latestFrame;
+            latestFrame.release();
+            tracks = std::move(latestTracks);
+            latestTracks.clear();
             stats = latestStats;
             consumedSeq = latestSeq;
         }

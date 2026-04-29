@@ -964,6 +964,7 @@ void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Tr
 
     std::vector<StreamOverlayTrack> overlayTracks;
     overlayTracks.reserve(tracks.size());
+    static constexpr size_t kRtspMaxPathPoints = 96;
     for (const auto& track : tracks) {
         cv::Rect2f stableBox = selectTrackRect720p(track);
         cv::Rect box(static_cast<int>(std::round(stableBox.x)),
@@ -977,6 +978,15 @@ void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Tr
         StreamOverlayTrack overlay;
         overlay.id = track.id;
         overlay.bbox = box;
+        overlay.personConfidence = track.prop;
+        for (auto it = track.frame_candidates.rbegin(); it != track.frame_candidates.rend(); ++it) {
+            if (it->has_face && it->face_bbox_720p.width > 0 && it->face_bbox_720p.height > 0) {
+                overlay.hasFaceBox = true;
+                overlay.faceBox = it->face_bbox_720p;
+                overlay.faceConfidence = it->face_confidence;
+                break;
+            }
+        }
         overlay.confirmed = track.confirmed;
         overlay.approaching = track.is_approaching;
         overlay.hasCaptured = track.has_captured;
@@ -984,10 +994,22 @@ void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Tr
         overlay.trajectoryScore = track.trajectory_score;
         overlay.peakBottom = track.peak_bottom;
         overlay.peakArea = track.peak_area;
-        overlay.path.reserve(track.trajectory_history.size());
-        for (const auto& point : track.trajectory_history) {
-            overlay.path.emplace_back(static_cast<int>(std::round(point.x)),
-                                      static_cast<int>(std::round(point.y)));
+        size_t pathSize = track.trajectory_history.size();
+        size_t pathPoints = std::min(pathSize, kRtspMaxPathPoints);
+        overlay.path.reserve(pathPoints);
+        if (pathSize <= kRtspMaxPathPoints) {
+            for (const auto& point : track.trajectory_history) {
+                overlay.path.emplace_back(static_cast<int>(std::round(point.x)),
+                                          static_cast<int>(std::round(point.y)));
+            }
+        } else {
+            double step = static_cast<double>(pathSize - 1) / static_cast<double>(kRtspMaxPathPoints - 1);
+            for (size_t i = 0; i < kRtspMaxPathPoints; ++i) {
+                size_t index = std::min(pathSize - 1, static_cast<size_t>(std::round(i * step)));
+                const auto& point = track.trajectory_history[index];
+                overlay.path.emplace_back(static_cast<int>(std::round(point.x)),
+                                          static_cast<int>(std::round(point.y)));
+            }
         }
         overlayTracks.push_back(std::move(overlay));
     }
@@ -1349,6 +1371,16 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     float yaw_penalty =
                                                         std::min(1.25f, yaw / std::max(0.10f, strong_candidate_ok ? config.maxYaw : config.fallbackMaxYaw)) * 60.0f;
 
+                                                    cv::Rect face_box_720p(
+                                                        static_cast<int>(std::round((job.personRoi4k.x + base_fbox.x) * job.scaleTo720pX)),
+                                                        static_cast<int>(std::round((job.personRoi4k.y + base_fbox.y) * job.scaleTo720pY)),
+                                                        static_cast<int>(std::round(base_fbox.width * job.scaleTo720pX)),
+                                                        static_cast<int>(std::round(base_fbox.height * job.scaleTo720pY)));
+                                                    face_box_720p.x = std::max(0, std::min(face_box_720p.x, IMAGE_WIDTH - 1));
+                                                    face_box_720p.y = std::max(0, std::min(face_box_720p.y, IMAGE_HEIGHT - 1));
+                                                    face_box_720p.width = std::max(1, std::min(face_box_720p.width, IMAGE_WIDTH - face_box_720p.x));
+                                                    face_box_720p.height = std::max(1, std::min(face_box_720p.height, IMAGE_HEIGHT - face_box_720p.y));
+
                                                     Track::FrameData frame_data;
                                                     frame_data.score = current_clarity * (0.55f + quality_weight * 0.20f) +
                                                                        clarity_norm * 220.0f +
@@ -1366,6 +1398,8 @@ void CameraTask::candidateEvalLoop(rknn_context faceCtx) {
                                                     frame_data.person_roi = person_aligned;
                                                     frame_data.face_roi = face_aligned;
                                                     frame_data.has_face = true;
+                                                    frame_data.face_bbox_720p = face_box_720p;
+                                                    frame_data.face_confidence = best_face.score;
                                                     frame_data.is_frontal = frontal_ok;
                                                     frame_data.face_pose_level = frontal_ok ? 2 : (frontal_relaxed_ok ? 1 : 0);
                                                     frame_data.strong_candidate = strong_candidate_ok;
@@ -1923,7 +1957,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         cachedTracks = sort_predict_only();
     }
 
-    vector<Track> tracks = cachedTracks;
+    const vector<Track>& tracks = cachedTracks;
     publishRtspFrame(resized_frame, tracks);
     std::unordered_set<int> activeTrackIds;
 
@@ -1961,7 +1995,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
 
     size_t track_count = tracks.size();
     for (size_t index = 0; index < track_count; ++index) {
-        auto& t = tracks[(candidateRoundRobinOffset + index) % track_count];
+        const auto& t = tracks[(candidateRoundRobinOffset + index) % track_count];
         activeTrackIds.insert(t.id);
 
         cv::Rect2f stable_bbox_720p = selectTrackRect720p(t);
@@ -2115,6 +2149,9 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         job.trackId = t.id;
         job.personRoi = person_roi.clone();
         job.fusionHistory = std::move(fusion_history);
+        job.personRoi4k = bbox_4k;
+        job.scaleTo720pX = scale_x;
+        job.scaleTo720pY = scale_y;
         job.areaRatio = area_ratio;
         job.personOcclusion = person_occlusion;
         job.motionRatio = motion_ratio;

@@ -57,6 +57,8 @@ struct Track {
         cv::Mat person_roi;
         cv::Mat face_roi;
         bool has_face;
+        cv::Rect face_bbox_720p;
+        float face_confidence{0.0f};
         bool is_frontal;
         uint8_t face_pose_level;
         bool strong_candidate;

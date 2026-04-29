@@ -8,6 +8,10 @@
 struct StreamOverlayTrack {
     int id{0};
     cv::Rect bbox;
+    float personConfidence{0.0f};
+    bool hasFaceBox{false};
+    cv::Rect faceBox;
+    float faceConfidence{0.0f};
     bool confirmed{false};
     bool approaching{false};
     bool hasCaptured{false};

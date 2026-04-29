@@ -80,6 +80,19 @@ void drawStreamOverlay(cv::Mat& frame,
 
         cv::Scalar color = trackColor(track);
         cv::rectangle(frame, box, color, 2, cv::LINE_AA);
+        if (track.hasFaceBox) {
+            cv::Rect faceBox = clampRect(track.faceBox, frame.size());
+            if (!faceBox.empty()) {
+                cv::Scalar faceColor(0, 255, 255);
+                cv::rectangle(frame, faceBox, faceColor, 2, cv::LINE_AA);
+                char faceLabel[64];
+                std::snprintf(faceLabel,
+                              sizeof(faceLabel),
+                              "face %.2f",
+                              track.faceConfidence);
+                drawLabel(frame, faceLabel, cv::Point(faceBox.x, std::max(18, faceBox.y - 4)), faceColor);
+            }
+        }
 
         if (track.path.size() >= 2) {
             std::vector<cv::Point> safePath;
@@ -96,8 +109,9 @@ void drawStreamOverlay(cv::Mat& frame,
         char label[128];
         std::snprintf(label,
                       sizeof(label),
-                      "ID %d %s score=%.2f peak=%.2f",
+                      "ID %d person=%.2f %s score=%.2f peak=%.2f",
                       track.id,
+                      track.personConfidence,
                       track.approaching ? "approach" : "track",
                       track.trajectoryScore,
                       track.peakBottom);

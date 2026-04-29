@@ -54,6 +54,9 @@ private:
         int trackId;
         cv::Mat personRoi;
         std::vector<cv::Mat> fusionHistory;
+        cv::Rect personRoi4k;
+        float scaleTo720pX{1.0f};
+        float scaleTo720pY{1.0f};
         float areaRatio;
         float personOcclusion;
         float motionRatio;
