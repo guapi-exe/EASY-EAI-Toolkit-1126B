@@ -65,6 +65,8 @@ static constexpr float TRAJECTORY_MIN_BOTTOM_TRAVEL = 0.015f;
 static constexpr float TRAJECTORY_MIN_AREA_TRAVEL = 0.008f;
 static constexpr float TRAJECTORY_SCORE_THRESHOLD = 0.08f;
 static constexpr float TRAJECTORY_RETURN_SCORE_THRESHOLD = 0.06f;
+static constexpr float TRAJECTORY_FINAL_SCORE_THRESHOLD = 0.045f;
+static constexpr size_t TRAJECTORY_FINAL_WINDOW_MAX = 12;
 
 struct TrackTrajectoryDecision {
     TrackTrajectoryDirection direction{TrackTrajectoryDirection::Unknown};
@@ -80,6 +82,11 @@ struct TrackTrajectoryDecision {
     float peak_area{0.0f};
     float approach_peak_score{0.0f};
     float return_score{0.0f};
+    float final_score{0.0f};
+    float final_bottom_start{0.0f};
+    float final_bottom_end{0.0f};
+    float final_area_start{0.0f};
+    float final_area_end{0.0f};
     int peak_index{-1};
     bool reversed_after_approach{false};
     bool reliable{false};
@@ -273,6 +280,24 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
     decision.peak_area = area_history[0];
     decision.peak_index = 0;
 
+    size_t final_window = std::min<size_t>(
+        TRAJECTORY_FINAL_WINDOW_MAX,
+        std::max<size_t>(2, eval_count / 5));
+    if (eval_count < final_window * 2) {
+        final_window = std::max<size_t>(2, eval_count / 2);
+    }
+    size_t final_end = eval_count;
+    size_t final_mid = final_end - final_window;
+    size_t final_start = final_mid >= final_window ? final_mid - final_window : 0;
+    decision.final_bottom_start = mean_range(bottom_history, final_start, final_mid);
+    decision.final_bottom_end = mean_range(bottom_history, final_mid, final_end);
+    decision.final_area_start = mean_range(area_history, final_start, final_mid);
+    decision.final_area_end = mean_range(area_history, final_mid, final_end);
+    decision.final_score = compute_trajectory_delta_score(decision.final_bottom_start,
+                                                          decision.final_bottom_end,
+                                                          decision.final_area_start,
+                                                          decision.final_area_end);
+
     float bottom_signed = 0.0f;
     float area_signed = 0.0f;
     for (size_t i = 1; i < eval_count; ++i) {
@@ -332,6 +357,7 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
         decision.score *= 0.55f;
         decision.approach_peak_score *= 0.55f;
         decision.return_score *= 0.55f;
+        decision.final_score *= 0.55f;
     }
 
     decision.reliable =
@@ -360,9 +386,9 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
     }
 
     // 即使可靠性不高，只要score绝对值足够大，也设置方向
-    if (decision.score >= TRAJECTORY_SCORE_THRESHOLD) {
+    if (decision.final_score >= TRAJECTORY_FINAL_SCORE_THRESHOLD) {
         decision.direction = TrackTrajectoryDirection::Approaching;
-    } else if (decision.score <= -TRAJECTORY_SCORE_THRESHOLD) {
+    } else if (decision.final_score <= -TRAJECTORY_FINAL_SCORE_THRESHOLD) {
         decision.direction = TrackTrajectoryDirection::Leaving;
     }
 
@@ -372,7 +398,7 @@ static TrackTrajectoryDecision evaluate_track_trajectory(const Track& t) {
 static void update_track_trajectory_state(Track& t) {
     TrackTrajectoryDecision decision = evaluate_track_trajectory(t);
     t.trajectory_direction = decision.direction;
-    t.trajectory_score = decision.score;
+    t.trajectory_score = decision.final_score;
     t.is_approaching = decision.direction == TrackTrajectoryDirection::Approaching;
     t.has_reversed = decision.reversed_after_approach;
     t.peak_bottom = decision.peak_bottom;
@@ -381,14 +407,19 @@ static void update_track_trajectory_state(Track& t) {
     // Log trajectory direction analysis
     if (decision.samples >= 5) {
         const char* direction_str = track_trajectory_direction_to_string(decision.direction);
-        log_debug("Track %d trajectory analysis: direction=%s score=%.3f bottom=%.3f->%.3f area=%.4f->%.4f",
+        log_debug("Track %d trajectory analysis: direction=%s score=%.3f final=%.3f bottom=%.3f->%.3f final_bottom=%.3f->%.3f area=%.4f->%.4f final_area=%.4f->%.4f",
                  t.id,
                  direction_str,
                  decision.score,
+                 decision.final_score,
                  decision.bottom_start,
                  decision.bottom_end,
+                 decision.final_bottom_start,
+                 decision.final_bottom_end,
                  decision.area_start,
-                 decision.area_end);
+                 decision.area_end,
+                 decision.final_area_start,
+                 decision.final_area_end);
     }
 }
 
@@ -400,70 +431,31 @@ static bool should_upload_track_by_trajectory(const Track& t,
         *out_decision = decision;
     }
 
-    float bottom_position = 0.0f;
-    if (!t.trajectory_history.empty()) {
-        bottom_position = t.trajectory_history.back().y / static_cast<float>(IMAGE_HEIGHT);
-    } else {
-        bottom_position = (t.bbox.y + t.bbox.height) / static_cast<float>(IMAGE_HEIGHT);
-    }
-
-    float current_area = decision.area_end;
-    if (current_area <= 0.0f && !t.trajectory_area_history.empty()) {
-        current_area = t.trajectory_area_history.back();
-    }
-    float max_area = std::max(decision.peak_area, t.max_area_ratio);
-    bool reached_near =
-        decision.peak_bottom >= 0.75f ||
-        max_area >= g_capture_near_area_ratio;
-    bool ended_near_bottom = bottom_position >= 0.68f;
-    bool started_near =
-        decision.bottom_start >= 0.70f ||
-        decision.area_start >= g_capture_near_area_ratio * 0.90f;
-    bool approach_seen =
-        decision.direction == TrackTrajectoryDirection::Approaching ||
-        decision.approach_peak_score >= 0.06f;
-
-    if (decision.reversed_after_approach) {
+    if (decision.samples < 5) {
         if (reason) {
-            *reason = "trajectory_returned_after_near";
+            *reason = "trajectory_insufficient";
         }
         return false;
     }
 
-    if (reached_near && bottom_position < 0.50f) {
+    if (decision.final_score <= -TRAJECTORY_FINAL_SCORE_THRESHOLD) {
         if (reason) {
-            *reason = "trajectory_returned_to_far";
+            *reason = "final_trend_leaving";
         }
         return false;
     }
 
-    if (g_capture_require_approach && !approach_seen && !started_near) {
+    if (decision.final_score < TRAJECTORY_FINAL_SCORE_THRESHOLD) {
         if (reason) {
-            *reason = "no_full_path_approach";
+            *reason = "final_trend_not_approaching";
         }
         return false;
-    }
-
-    bool significantly_smaller =
-        max_area > 0.0f &&
-        current_area > 0.0f &&
-        current_area < max_area * 0.55f;
-    bool area_shrinking_near_exit =
-        significantly_smaller &&
-        reached_near &&
-        bottom_position >= 0.58f;
-
-    if (t.missed > 1 && reached_near && (ended_near_bottom || area_shrinking_near_exit)) {
-        if (reason) {
-            *reason = ended_near_bottom ? "trajectory_lost_near_bottom" : "trajectory_area_shrunk_near_bottom";
-        }
-        return true;
     }
 
     if (reason) {
-        *reason = "not_lost_near_bottom";
+        *reason = "final_trend_approaching";
     }
-    return false;
+    return true;
 }
 
 void sort_init() { 
@@ -921,7 +913,7 @@ static size_t select_best_person_frame_index(const std::vector<Track::FrameData>
     return best_index;
 }
 
-static bool should_suppress_new_track(const Detection& det) {
+static bool should_suppress_new_track(const Detection& det, const cv::Mat& det_hist) {
     cv::Rect2f det_rect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
 
     // Check against active tracks.
@@ -929,7 +921,13 @@ static bool should_suppress_new_track(const Detection& det) {
         cv::Rect2f ref_bbox = stable_track_bbox(t);
         float iou_score = iou(ref_bbox, det_rect);
         float center_dist = center_distance_norm(ref_bbox, det_rect);
-        if (iou_score > 0.38f || center_dist < 0.05f) {
+        float area_ratio = std::min(ref_bbox.area(), det_rect.area()) /
+                           std::max(ref_bbox.area(), det_rect.area());
+        float hist_score = det_hist.empty() || t.hist.empty()
+            ? 1.0f
+            : hist_distance(t.hist, det_hist);
+        if ((iou_score > 0.82f && center_dist < 0.030f) ||
+            (iou_score > 0.52f && center_dist < 0.045f && area_ratio > 0.72f && hist_score < 0.35f)) {
             return true;
         }
     }
@@ -937,7 +935,13 @@ static bool should_suppress_new_track(const Detection& det) {
     for (const auto& pt : pending_tracks) {
         float iou_score = iou(pt.bbox, det_rect);
         float center_dist = center_distance_norm(pt.bbox, det_rect);
-        if (iou_score > 0.38f || center_dist < 0.05f) {
+        float area_ratio = std::min(pt.bbox.area(), det_rect.area()) /
+                           std::max(pt.bbox.area(), det_rect.area());
+        float hist_score = det_hist.empty() || pt.hist.empty()
+            ? 1.0f
+            : hist_distance(pt.hist, det_hist);
+        if ((iou_score > 0.82f && center_dist < 0.030f) ||
+            (iou_score > 0.52f && center_dist < 0.045f && area_ratio > 0.72f && hist_score < 0.35f)) {
             return true;
         }
     }
@@ -953,9 +957,15 @@ static int update_pending_track(const Detection& det, const cv::Mat& det_hist) {
         float iou_score = iou(pending_tracks[i].bbox, det_rect);
         float hist_score = hist_distance(pending_tracks[i].hist, det_hist);
         float center_dist = center_distance_norm(pending_tracks[i].bbox, det_rect);
+        float area_ratio = std::min(pending_tracks[i].bbox.area(), det_rect.area()) /
+                           std::max(pending_tracks[i].bbox.area(), det_rect.area());
         float center_score = 1.0f - std::min(1.0f, center_dist / 0.15f);
         float score = iou_score * 0.45f + (1.0f - hist_score) * 0.35f + center_score * 0.20f;
-        if ((iou_score > 0.12f || center_dist < 0.05f) && hist_score < 0.55f && score > best_score) {
+        bool same_pending_target =
+            (iou_score > 0.24f || center_dist < 0.035f) &&
+            area_ratio > 0.58f &&
+            hist_score < 0.42f;
+        if (same_pending_target && score > best_score) {
             best_score = score;
             best_idx = i;
         }
@@ -1389,38 +1399,48 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
         TrackTrajectoryDecision trajectory_decision;
         const char* trajectory_reason = nullptr;
         if (!should_upload_track_by_trajectory(t, &trajectory_decision, &trajectory_reason)) {
-            log_info("---Track %d skipped upload on loss: reason=%s dir=%s score=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f peak=%.4f max_area=%.4f",
+            log_info("---Track %d skipped upload on loss: reason=%s dir=%s score=%.3f final=%.3f peak_score=%.3f return_score=%.3f reversed=%d samples=%d bottom=%.3f->%.3f final_bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f final_area=%.4f->%.4f peak=%.4f max_area=%.4f",
                      t.id,
                      trajectory_reason ? trajectory_reason : "trajectory_reject",
                      track_trajectory_direction_to_string(trajectory_decision.direction),
                      trajectory_decision.score,
+                     trajectory_decision.final_score,
                      trajectory_decision.approach_peak_score,
                      trajectory_decision.return_score,
                      trajectory_decision.reversed_after_approach ? 1 : 0,
                      trajectory_decision.samples,
                      trajectory_decision.bottom_start,
                      trajectory_decision.bottom_end,
+                     trajectory_decision.final_bottom_start,
+                     trajectory_decision.final_bottom_end,
                      trajectory_decision.peak_bottom,
                      trajectory_decision.area_start,
                      trajectory_decision.area_end,
+                     trajectory_decision.final_area_start,
+                     trajectory_decision.final_area_end,
                      trajectory_decision.peak_area,
                      t.max_area_ratio);
             return;
         }
 
-        log_info("Track %d accepted upload by full trajectory: reason=%s dir=%s score=%.3f peak_score=%.3f return_score=%.3f samples=%d bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f peak=%.4f max_area=%.4f",
+        log_info("Track %d accepted upload by final trajectory: reason=%s dir=%s score=%.3f final=%.3f peak_score=%.3f return_score=%.3f samples=%d bottom=%.3f->%.3f final_bottom=%.3f->%.3f peak=%.3f area=%.4f->%.4f final_area=%.4f->%.4f peak=%.4f max_area=%.4f",
                  t.id,
                  trajectory_reason ? trajectory_reason : "trajectory_accept",
                  track_trajectory_direction_to_string(trajectory_decision.direction),
                  trajectory_decision.score,
+                 trajectory_decision.final_score,
                  trajectory_decision.approach_peak_score,
                  trajectory_decision.return_score,
                  trajectory_decision.samples,
                  trajectory_decision.bottom_start,
                  trajectory_decision.bottom_end,
+                 trajectory_decision.final_bottom_start,
+                 trajectory_decision.final_bottom_end,
                  trajectory_decision.peak_bottom,
                  trajectory_decision.area_start,
                  trajectory_decision.area_end,
+                 trajectory_decision.final_area_start,
+                 trajectory_decision.final_area_end,
                  trajectory_decision.peak_area,
                  t.max_area_ratio);
 
@@ -1641,7 +1661,7 @@ std::vector<TrackSnapshot> sort_update(const std::vector<Detection>& dets) {
     // 鍒涘缓鏂皌racks
     for (int j : high_det_indices) {
         if(!det_assigned[j] && dets[j].allow_new_track){
-            if (should_suppress_new_track(dets[j])) {
+            if (should_suppress_new_track(dets[j], det_hists[j])) {
                 continue;
             }
 

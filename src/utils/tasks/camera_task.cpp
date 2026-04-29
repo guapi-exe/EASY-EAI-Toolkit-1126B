@@ -1913,7 +1913,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
         for (int i = 0; i < detect_result_group.count; i++) {
             detect_result_t& d = detect_result_group.results[i];
 
-            const float kHighTrackConfidence = 0.70f;
+            const float kHighTrackConfidence = 0.60f;
             const float kLowTrackConfidence = 0.35f;
             if (d.prop < kLowTrackConfidence) continue;
 
@@ -1933,7 +1933,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
             dets.push_back(det);
         }
 
-        nmsDetections(dets, 0.45f);
+        nmsDetections(dets, 0.70f);
         cachedTracks = sort_update(dets);
     } else {
         // Non-detection frame: advance EKF predictions to avoid sawtooth jitter.

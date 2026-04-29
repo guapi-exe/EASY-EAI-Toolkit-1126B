@@ -75,21 +75,31 @@ int main(int argc, char** argv) {
                  IMAGE_HEIGHT);
     }
 
-    if (debugMode) {
-        // 调试模式下回退到原自动上传接口，便于联调旧服务。
-        if (config.uploadImagePath != "/receive/image/auto") {
-            config.uploadImagePath = "/receive/image/auto";
-            config.save(configPath);
+    {
+        bool uploadConfigChanged = false;
+        if (config.uploadServer == "http://101.200.56.225:11100" ||
+            config.uploadServer == "http://117.132.4.39:81/receiveApi") {
+            config.uploadServer = "http://117.132.4.39:81";
+            uploadConfigChanged = true;
         }
-        log_info("Debug mode enabled: upload path switched to %s", config.uploadImagePath.c_str());
-    } else {
-        // 非调试模式默认使用 minio 上传接口。
-        if (config.uploadImagePath != "/receive/image/auto/minio") {
-            config.uploadImagePath = "/receive/image/auto/minio";
+        if (config.uploadImagePath == "/receive/image/auto" ||
+            config.uploadImagePath == "/receive/image/auto/minio") {
+            config.uploadImagePath = "/receiveApi";
+            uploadConfigChanged = true;
+        }
+        if (config.uploadManualImagePath == "/receive/image/manual") {
+            config.uploadManualImagePath = "/receiveApi";
+            uploadConfigChanged = true;
+        }
+        if (uploadConfigChanged) {
             config.save(configPath);
-            log_info("Normal mode: upload path switched to %s", config.uploadImagePath.c_str());
         }
     }
+    log_info("Upload config: mode=%s server=%s image_path=%s manual_path=%s",
+             debugMode ? "debug" : "normal",
+             config.uploadServer.c_str(),
+             config.uploadImagePath.c_str(),
+             config.uploadManualImagePath.c_str());
 
     UploaderTask uploader(config.deviceCode, config.uploadServer);
     CameraTask camera(PERSON_MODEL_PATH, FACE_MODEL_PATH, config.camera.primaryIndex);
