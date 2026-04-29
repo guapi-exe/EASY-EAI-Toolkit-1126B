@@ -75,6 +75,21 @@ int main(int argc, char** argv) {
                  IMAGE_HEIGHT);
     }
 
+    if (debugMode) {
+        // 调试模式下回退到原自动上传接口，便于联调旧服务。
+        if (config.uploadImagePath != "/receive/image/auto") {
+            config.uploadImagePath = "/receive/image/auto";
+            config.save(configPath);
+        }
+        log_info("Debug mode enabled: upload path switched to %s", config.uploadImagePath.c_str());
+    } else {
+        // 非调试模式默认使用 minio 上传接口。
+        if (config.uploadImagePath != "/receive/image/auto/minio") {
+            config.uploadImagePath = "/receive/image/auto/minio";
+            config.save(configPath);
+            log_info("Normal mode: upload path switched to %s", config.uploadImagePath.c_str());
+        }
+    }
     log_info("Upload config: mode=%s server=%s image_path=%s manual_path=%s",
              debugMode ? "debug" : "normal",
              config.uploadServer.c_str(),
