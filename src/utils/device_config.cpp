@@ -94,6 +94,14 @@ static json buildDefaultJson(const DeviceConfig& cfg) {
         {"heartbeat_interval_sec", cfg.heartbeatIntervalSec},
         {"reconnect_interval_sec", cfg.reconnectIntervalSec}
     };
+    j["camera"] = {
+        {"capture_width", cfg.camera.captureWidth},
+        {"capture_height", cfg.camera.captureHeight},
+        {"process_width", cfg.camera.processWidth},
+        {"process_height", cfg.camera.processHeight},
+        {"primary_index", cfg.camera.primaryIndex},
+        {"secondary_index", cfg.camera.secondaryIndex}
+    };
     j["capture_defaults"] = {
         {"min_clarity", configFloat(cfg.captureDefaults.minClarity)},
         {"fallback_min_clarity", configFloat(cfg.captureDefaults.fallbackMinClarity)},
@@ -200,6 +208,33 @@ static void loadFromJson(DeviceConfig* cfg, const json& j) {
         if (j["tcp"].contains("reconnect_interval_sec")) {
             cfg->reconnectIntervalSec = j["tcp"]["reconnect_interval_sec"].get<int>();
         }
+    }
+
+    if (j.contains("camera") && j["camera"].is_object()) {
+        const json& camera = j["camera"];
+        auto loadPositiveInt = [&camera](const char* key, int& value) {
+            if (camera.contains(key)) {
+                int v = camera[key].get<int>();
+                if (v > 0) {
+                    value = v;
+                }
+            }
+        };
+        auto loadNonNegativeInt = [&camera](const char* key, int& value) {
+            if (camera.contains(key)) {
+                int v = camera[key].get<int>();
+                if (v >= 0) {
+                    value = v;
+                }
+            }
+        };
+
+        loadPositiveInt("capture_width", cfg->camera.captureWidth);
+        loadPositiveInt("capture_height", cfg->camera.captureHeight);
+        loadPositiveInt("process_width", cfg->camera.processWidth);
+        loadPositiveInt("process_height", cfg->camera.processHeight);
+        loadNonNegativeInt("primary_index", cfg->camera.primaryIndex);
+        loadNonNegativeInt("secondary_index", cfg->camera.secondaryIndex);
     }
 
     if (j.contains("ircut") && j["ircut"].is_object()) {

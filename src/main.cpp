@@ -55,6 +55,23 @@ int main(int argc, char** argv) {
         log_error("Failed to load or create config file: %s", configPath.c_str());
         return -1;
     }
+    log_info("Camera config: primary_index=%d secondary_index=%d capture=%dx%d process=%dx%d",
+             config.camera.primaryIndex,
+             config.camera.secondaryIndex,
+             config.camera.captureWidth,
+             config.camera.captureHeight,
+             config.camera.processWidth,
+             config.camera.processHeight);
+    if (config.camera.captureWidth != CAMERA_WIDTH ||
+        config.camera.captureHeight != CAMERA_HEIGHT ||
+        config.camera.processWidth != IMAGE_WIDTH ||
+        config.camera.processHeight != IMAGE_HEIGHT) {
+        log_warn("Camera resolution config differs from compiled geometry; current pipeline still uses capture=%dx%d process=%dx%d",
+                 CAMERA_WIDTH,
+                 CAMERA_HEIGHT,
+                 IMAGE_WIDTH,
+                 IMAGE_HEIGHT);
+    }
 
     if (debugMode) {
         // 调试模式下回退到原自动上传接口，便于联调旧服务。
@@ -73,7 +90,7 @@ int main(int argc, char** argv) {
     }
 
     UploaderTask uploader(config.deviceCode, config.uploadServer);
-    CameraTask camera(PERSON_MODEL_PATH, FACE_MODEL_PATH, CAMERA_INDEX_1);
+    CameraTask camera(PERSON_MODEL_PATH, FACE_MODEL_PATH, config.camera.primaryIndex);
     TcpClient tcpClient(&config, configPath);
     camera.setRuntimeConfig(config);
     if (rtspMode) {

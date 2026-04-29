@@ -74,6 +74,15 @@ struct DeviceConfig {
         double darkBlend = CAMERA_BRIGHTNESS_DARK_BLEND;
     };
 
+    struct CameraConfig {
+        int captureWidth = CAMERA_WIDTH;
+        int captureHeight = CAMERA_HEIGHT;
+        int processWidth = IMAGE_WIDTH;
+        int processHeight = IMAGE_HEIGHT;
+        int primaryIndex = CAMERA_INDEX_1;
+        int secondaryIndex = CAMERA_INDEX_2;
+    };
+
     std::string deviceCode = "00000001";
     int cameraNumber = DEFAULT_CAMERA_NUMBER;
     std::string uploadServer = "http://101.200.56.225:11100";
@@ -86,6 +95,7 @@ struct DeviceConfig {
     double brightnessBlackThreshold = CAMERA_BRIGHTNESS_BLACK_THRESHOLD;
     CaptureDefaults captureDefaults;
     BrightnessBoostConfig brightnessBoost;
+    CameraConfig camera;
 
     bool loadOrCreate(const std::string& filePath);
     bool save(const std::string& filePath) const;
