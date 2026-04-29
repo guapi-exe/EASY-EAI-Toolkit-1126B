@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <dirent.h>
+#include <utility>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -666,6 +667,7 @@ void CameraTask::stop() {
     if (!running && !cameraOpened && !worker.joinable()) return;
     log_info("CameraTask: stopping...");
     running = false;
+    stopRtspStreamTask();
     frameCv.notify_all();
     {
         std::lock_guard<std::mutex> lock(candidateEvalMutex);
@@ -705,6 +707,20 @@ void CameraTask::setRuntimeConfig(const DeviceConfig& config) {
                                  config.captureDefaults.nearAreaRatio,
                                  config.captureDefaults.maxPersonOcclusion,
                                  config.captureDefaults.requireApproach);
+}
+
+void CameraTask::enableRtspStream(const RtspStreamOptions& options) {
+    std::lock_guard<std::mutex> lock(rtspStreamMutex);
+    rtspStreamOptions = options;
+    rtspStreamEnabled = true;
+}
+
+void CameraTask::disableRtspStream() {
+    {
+        std::lock_guard<std::mutex> lock(rtspStreamMutex);
+        rtspStreamEnabled = false;
+    }
+    stopRtspStreamTask();
 }
 
 DeviceConfig::CaptureDefaults CameraTask::getCaptureConfigSnapshot() const {
@@ -906,6 +922,85 @@ void CameraTask::updateFPS() {
         if (totalElapsed.count() % 10 == 0 && totalElapsed.count() > 0) {
             log_info("Algo FPS: total_processed=%ld, fps=%.2f, uptime=%lds", currentFrames, currentFPS.load(), totalElapsed.count());
         }
+    }
+}
+
+void CameraTask::startRtspStreamIfEnabled() {
+    std::lock_guard<std::mutex> lock(rtspStreamMutex);
+    if (!rtspStreamEnabled || rtspStreamTask) {
+        return;
+    }
+
+    rtspStreamTask.reset(new RtspStreamTask(rtspStreamOptions));
+    if (!rtspStreamTask->start()) {
+        log_error("CameraTask: failed to start RTSP stream task");
+        rtspStreamTask.reset();
+        return;
+    }
+
+    log_info("CameraTask: RTSP overlay stream enabled: %s", rtspStreamTask->url().c_str());
+}
+
+void CameraTask::stopRtspStreamTask() {
+    std::unique_ptr<RtspStreamTask> task;
+    {
+        std::lock_guard<std::mutex> lock(rtspStreamMutex);
+        task = std::move(rtspStreamTask);
+    }
+    if (task) {
+        task->stop();
+    }
+}
+
+void CameraTask::publishRtspFrame(const cv::Mat& frame720p, const std::vector<Track>& tracks) {
+    bool shouldPublish = false;
+    {
+        std::lock_guard<std::mutex> lock(rtspStreamMutex);
+        shouldPublish = rtspStreamTask && rtspStreamTask->shouldAcceptFrame();
+    }
+    if (!shouldPublish || frame720p.empty()) {
+        return;
+    }
+
+    std::vector<StreamOverlayTrack> overlayTracks;
+    overlayTracks.reserve(tracks.size());
+    for (const auto& track : tracks) {
+        cv::Rect2f stableBox = selectTrackRect720p(track);
+        cv::Rect box(static_cast<int>(std::round(stableBox.x)),
+                     static_cast<int>(std::round(stableBox.y)),
+                     static_cast<int>(std::round(stableBox.width)),
+                     static_cast<int>(std::round(stableBox.height)));
+        if (box.width <= 0 || box.height <= 0) {
+            continue;
+        }
+
+        StreamOverlayTrack overlay;
+        overlay.id = track.id;
+        overlay.bbox = box;
+        overlay.confirmed = track.confirmed;
+        overlay.approaching = track.is_approaching;
+        overlay.hasCaptured = track.has_captured;
+        overlay.hasReversed = track.has_reversed;
+        overlay.trajectoryScore = track.trajectory_score;
+        overlay.peakBottom = track.peak_bottom;
+        overlay.peakArea = track.peak_area;
+        overlay.path.reserve(track.trajectory_history.size());
+        for (const auto& point : track.trajectory_history) {
+            overlay.path.emplace_back(static_cast<int>(std::round(point.x)),
+                                      static_cast<int>(std::round(point.y)));
+        }
+        overlayTracks.push_back(std::move(overlay));
+    }
+
+    StreamOverlayStats stats;
+    stats.frameIndex = totalFrames.load();
+    stats.fps = currentFPS.load();
+    stats.envBrightness = environmentBrightness.load();
+    stats.activeTracks = static_cast<int>(tracks.size());
+
+    std::lock_guard<std::mutex> lock(rtspStreamMutex);
+    if (rtspStreamTask) {
+        rtspStreamTask->publishFrame(frame720p, std::move(overlayTracks), stats);
     }
 }
 
@@ -1525,6 +1620,7 @@ void CameraTask::run() {
         candidateEvalQueue.clear();
         pendingCandidateEvalByTrack.clear();
     }
+    startRtspStreamIfEnabled();
     candidateWorker = std::thread(&CameraTask::candidateEvalLoop, this, faceCtx);
     captureWorker = std::thread(&CameraTask::captureLoop, this);
 
@@ -1567,6 +1663,7 @@ void CameraTask::run() {
         candidateWorker.join();
     }
 
+    stopRtspStreamTask();
     log_info("CameraTask: inference loop exited, cleaning up...");
     if (cameraOpened.exchange(false)) {
         mipicamera_exit(cameraIndex);
@@ -1827,6 +1924,7 @@ void CameraTask::processFrame(const Mat& frame, rknn_context personCtx) {
     }
 
     vector<Track> tracks = cachedTracks;
+    publishRtspFrame(resized_frame, tracks);
     std::unordered_set<int> activeTrackIds;
 
     std::unordered_map<int, cv::Rect> trackBoxes720p;

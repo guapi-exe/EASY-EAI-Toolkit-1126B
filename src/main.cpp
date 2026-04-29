@@ -3,9 +3,12 @@
 #include "uploader_task.h"
 #include "device_config.h"
 #include "tcp_client.h"
+#include "streaming/rtsp_stream_task.h"
+#include <algorithm>
 #include <atomic>
 #include <csignal> 
 #include <chrono>
+#include <cstdlib>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -22,11 +25,28 @@ void handleSignal(int) {
 
 int main(int argc, char** argv) {
     bool debugMode = false;
+    bool rtspMode = false;
+    RtspStreamOptions rtspOptions;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "debug" || arg == "--debug") {
             debugMode = true;
+        } else if (arg == "--rtsp") {
+            rtspMode = true;
+        } else if (arg == "--rtsp-port" && i + 1 < argc) {
+            rtspOptions.port = argv[++i];
+        } else if (arg == "--rtsp-path" && i + 1 < argc) {
+            rtspOptions.mountPath = argv[++i];
+        } else if (arg == "--rtsp-fps" && i + 1 < argc) {
+            rtspOptions.fps = std::max(1, std::atoi(argv[++i]));
+        } else if (arg == "--rtsp-width" && i + 1 < argc) {
+            rtspOptions.width = std::max(160, std::atoi(argv[++i]));
+        } else if (arg == "--rtsp-height" && i + 1 < argc) {
+            rtspOptions.height = std::max(120, std::atoi(argv[++i]));
         }
+    }
+    if (rtspMode && (rtspOptions.mountPath.empty() || rtspOptions.mountPath[0] != '/')) {
+        rtspOptions.mountPath.insert(rtspOptions.mountPath.begin(), '/');
     }
 
     const std::string configPath = "device_config.json";
@@ -56,6 +76,12 @@ int main(int argc, char** argv) {
     CameraTask camera(PERSON_MODEL_PATH, FACE_MODEL_PATH, CAMERA_INDEX_1);
     TcpClient tcpClient(&config, configPath);
     camera.setRuntimeConfig(config);
+    if (rtspMode) {
+        camera.enableRtspStream(rtspOptions);
+        log_info("RTSP overlay stream requested: rtsp://localhost:%s%s",
+                 rtspOptions.port.c_str(),
+                 rtspOptions.mountPath.c_str());
+    }
 
     std::atomic<bool> sleepMode(false);
     std::unordered_map<int, std::string> groupedUniqueCode;

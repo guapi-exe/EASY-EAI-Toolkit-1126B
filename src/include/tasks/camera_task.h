@@ -5,6 +5,7 @@
 #include "device_config.h"
 #include "rknn_api.h"
 #include "main.h"
+#include "sort_tracker.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -16,6 +17,8 @@
 #include <condition_variable>
 #include <deque>
 #include <vector>
+#include <memory>
+#include "streaming/rtsp_stream_task.h"
 
 class CameraTask {
 public:
@@ -33,6 +36,8 @@ public:
     void setUploadCallback(UploadCallback cb);
     void setPersonEventCallback(PersonEventCallback cb);
     void setRuntimeConfig(const DeviceConfig& config);
+    void enableRtspStream(const RtspStreamOptions& options);
+    void disableRtspStream();
     void setBrightnessBlackThreshold(double threshold) { brightnessBlackThreshold.store(threshold); }
     double getBrightnessBlackThreshold() const { return brightnessBlackThreshold.load(); }
     void captureSnapshot();
@@ -65,6 +70,9 @@ private:
     void logTrackReject(const char* stage, int trackId, const char* reason, const std::string& detail);
     void clearTrackReject(const char* stage, int trackId);
     void processFrame(const cv::Mat& frame, rknn_context personCtx);
+    void startRtspStreamIfEnabled();
+    void stopRtspStreamTask();
+    void publishRtspFrame(const cv::Mat& frame720p, const std::vector<Track>& tracks);
     void updateFPS();
     DeviceConfig::CaptureDefaults getCaptureConfigSnapshot() const;
     DeviceConfig::BrightnessBoostConfig getBrightnessBoostConfigSnapshot() const;
@@ -116,6 +124,10 @@ private:
     size_t candidateRoundRobinOffset{0};
 
     std::unordered_set<int> reportedPersonIds;
+    std::mutex rtspStreamMutex;
+    bool rtspStreamEnabled{false};
+    RtspStreamOptions rtspStreamOptions;
+    std::unique_ptr<RtspStreamTask> rtspStreamTask;
     std::atomic<double> environmentBrightness{0.0};
     std::atomic<float> sensorExposureRatio{0.0f};  // exposure / max_exposure (0.0~1.0)
     std::atomic<float> sensorGainRatio{0.0f};      // (gain - min_gain) / (max_gain - min_gain) (0.0~1.0)

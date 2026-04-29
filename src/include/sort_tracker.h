@@ -45,6 +45,9 @@ struct Track {
     TrackTrajectoryDirection trajectory_direction;
     float trajectory_score;
     float max_area_ratio;
+    bool has_reversed;
+    float peak_bottom;
+    float peak_area;
     double best_clarity;
     bool has_captured;
 
