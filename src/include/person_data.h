@@ -5,7 +5,7 @@
 #define FEATURE_HIST_BIN   16
 #define PERSON_TIMEOUT_FRAMES 50
 
-#include "postprocess.h"
+#include "../../easyeai-api/algorithm/person_detect/postprocess.h"
 #include <stdint.h>
 
 typedef struct

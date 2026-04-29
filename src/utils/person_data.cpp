@@ -1,6 +1,7 @@
 #include <math.h>
 #include "person_data.h"
 #include <string.h>
+#include <cstdio>
 
 PersonRecord g_person_list[MAX_TRACKED_PERSON];
 int g_next_person_id = 1;
