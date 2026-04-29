@@ -40,6 +40,7 @@ struct Track {
     bool confirmed;
     std::vector<float> bbox_history;
     std::vector<cv::Point2f> trajectory_history;
+    std::vector<float> trajectory_area_history;
     float bbox_jitter;
     bool is_approaching;
     TrackTrajectoryDirection trajectory_direction;
