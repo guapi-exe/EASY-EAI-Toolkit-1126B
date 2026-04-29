@@ -13,10 +13,10 @@
 #include <vector>
 
 struct RtspStreamOptions {
-    int width{1280};
-    int height{720};
-    int fps{15};
-    int bitrateKbps{2000};
+    int width{960};
+    int height{540};
+    int fps{10};
+    int bitrateKbps{1000};
     std::string port{"8554"};
     std::string mountPath{"/stream"};
 };

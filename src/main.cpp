@@ -43,6 +43,8 @@ int main(int argc, char** argv) {
             rtspOptions.width = std::max(160, std::atoi(argv[++i]));
         } else if (arg == "--rtsp-height" && i + 1 < argc) {
             rtspOptions.height = std::max(120, std::atoi(argv[++i]));
+        } else if (arg == "--rtsp-bitrate" && i + 1 < argc) {
+            rtspOptions.bitrateKbps = std::max(256, std::atoi(argv[++i]));
         }
     }
     if (rtspMode && (rtspOptions.mountPath.empty() || rtspOptions.mountPath[0] != '/')) {

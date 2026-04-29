@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <thread>
 
 extern "C" {
@@ -35,6 +36,75 @@ bool ensureGstInitialized() {
     });
 
     return initialized;
+}
+
+bool hasGstFactory(const char* name) {
+    GstElementFactory* factory = gst_element_factory_find(name);
+    if (!factory) {
+        return false;
+    }
+    gst_object_unref(factory);
+    return true;
+}
+
+bool elementHasProperty(const char* factoryName, const char* propertyName) {
+    GstElement* element = gst_element_factory_make(factoryName, nullptr);
+    if (!element) {
+        return false;
+    }
+    bool hasProperty =
+        g_object_class_find_property(G_OBJECT_GET_CLASS(element), propertyName) != nullptr;
+    gst_object_unref(element);
+    return hasProperty;
+}
+
+std::string buildH264EncoderLaunch(const RtspStreamerConfig& config,
+                                   std::string* encoderName) {
+    const int gop = std::max(1, config.fps * 2);
+    const std::string h264parse = hasGstFactory("h264parse") ? " ! h264parse" : "";
+
+    if (hasGstFactory("mpph264enc")) {
+        std::string encoder = "mpph264enc";
+        if (elementHasProperty("mpph264enc", "bps")) {
+            encoder += " bps=" + std::to_string(std::max(1, config.bitrateKbps) * 1000);
+        } else if (elementHasProperty("mpph264enc", "bitrate")) {
+            encoder += " bitrate=" + std::to_string(std::max(1, config.bitrateKbps));
+        }
+        if (elementHasProperty("mpph264enc", "gop")) {
+            encoder += " gop=" + std::to_string(gop);
+        }
+        if (encoderName) {
+            *encoderName = "mpph264enc";
+        }
+        return "videoconvert ! video/x-raw,format=NV12 ! " +
+               encoder +
+               h264parse + " ! ";
+    }
+
+    if (hasGstFactory("v4l2h264enc")) {
+        std::string encoder = "v4l2h264enc";
+        if (elementHasProperty("v4l2h264enc", "bitrate")) {
+            encoder += " bitrate=" + std::to_string(std::max(1, config.bitrateKbps) * 1000);
+        }
+        if (encoderName) {
+            *encoderName = "v4l2h264enc";
+        }
+        return "videoconvert ! video/x-raw,format=NV12 ! " +
+               encoder +
+               h264parse + " ! ";
+    }
+
+    if (encoderName) {
+        *encoderName = "x264enc";
+    }
+    char launch[256];
+    std::snprintf(launch,
+                  sizeof(launch),
+                  "videoconvert ! x264enc tune=zerolatency bitrate=%d "
+                  "speed-preset=ultrafast key-int-max=%d bframes=0 byte-stream=true ! ",
+                  std::max(1, config.bitrateKbps),
+                  gop);
+    return std::string(launch);
 }
 
 void configureAppSrc(GstElement* appsrc,
@@ -177,16 +247,22 @@ struct RtspStreamer::Impl {
             return false;
         }
 
-        char launch[768];
+        std::string encoderName;
+        std::string encoderLaunch = buildH264EncoderLaunch(config, &encoderName);
+        char launch[1024];
         std::snprintf(launch,
                       sizeof(launch),
                       "appsrc name=videosrc format=time is-live=true do-timestamp=true block=false ! "
-                      "queue max-size-buffers=2 leaky=downstream ! "
-                      "videoconvert ! "
-                      "x264enc tune=zerolatency bitrate=%d speed-preset=superfast key-int-max=%d bframes=0 byte-stream=true ! "
+                      "queue max-size-buffers=1 leaky=downstream ! "
+                      "%s"
                       "rtph264pay name=pay0 pt=96 config-interval=1",
-                      config.bitrateKbps,
-                      std::max(1, config.fps * 2));
+                      encoderLaunch.c_str());
+        log_info("RTSP: encoder=%s, stream=%dx%d@%dfps bitrate=%dkbps",
+                 encoderName.c_str(),
+                 config.width,
+                 config.height,
+                 config.fps,
+                 config.bitrateKbps);
 
         gst_rtsp_media_factory_set_launch(factory, launch);
         gst_rtsp_media_factory_set_shared(factory, TRUE);
