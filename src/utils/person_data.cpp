@@ -1,6 +1,5 @@
 #include <math.h>
 #include "person_data.h"
-#include "person_detect.h"
 #include <string.h>
 
 PersonRecord g_person_list[MAX_TRACKED_PERSON];

@@ -5,7 +5,8 @@
 #define FEATURE_HIST_BIN   16
 #define PERSON_TIMEOUT_FRAMES 50
 
-#include "person_detect.h"
+#include "postprocess.h"
+#include <stdint.h>
 
 typedef struct
 {
@@ -20,7 +21,7 @@ extern PersonRecord g_person_list[MAX_TRACKED_PERSON];
 extern int g_next_person_id;
 
 
-int is_same_person(PersonRecord *p, BOX_RECT box, float hist[FEATURE_HIST_BIN]);
+int is_same_person(PersonRecord *p, BOX_RECT box, float hist[FEATURE_HIST_BIN], int img_w, int img_h);
 void calc_histogram(const uint8_t *rgb, int img_w, int img_h,BOX_RECT box, float hist[FEATURE_HIST_BIN]);
 void reset_person_list();
 int match_or_register_person(const uint8_t *rgb, int img_w, int img_h, BOX_RECT box, uint64_t frame_id);
